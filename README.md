@@ -1,5 +1,7 @@
 <div align="center">
 
+🌐 **English** · [简体中文](README.zh.md)
+
 # 🏮 Fathom
 
 ### Everything finds filenames. **Fathom finds meaning.**
