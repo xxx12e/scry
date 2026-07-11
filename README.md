@@ -38,7 +38,7 @@ A real semantic engine, not a keyword matcher with a marketing label — and it'
 | 🔁 **~35 s** to index 100k files, **~0.1 s** to re‑scan | incremental diff measured **235× faster** than a full scan |
 | 🎯 matches paraphrases with **zero shared words** | exact FAISS + BM25 hybrid, fp16 — half the RAM/disk |
 | 🔒 **0 bytes** leave your machine | fully offline · binds `127.0.0.1` · no account, no telemetry |
-| 📄 **txt · md · pdf · docx** · no Docker, single `.exe` | bilingual UI, one‑click 中/EN toggle |
+| 📄 **10 formats** (txt·md·pdf·docx·xlsx·pptx·csv·html·rtf) · no Docker | single `.exe` · optional add‑on packs (DLC) |
 
 <sub>Speeds measured on a modern GPU (embedding) + FAISS; CPU stays well under the 100 ms interactive bar.</sub>
 
@@ -51,6 +51,8 @@ A real semantic engine, not a keyword matcher with a marketing label — and it'
 | 🎯 **Deep Semantic (Control Mode)** | Point it at folders (or a whole drive) and it builds its *own* deep index — the highest quality, catches paraphrases with **zero word overlap**. First scan is full; after that it only touches what changed, and keeps itself up to date in the background. | One click per folder. |
 
 Plus: **bilingual UI (中文 / English, one‑click toggle)**, keyboard‑driven (`Enter` to search, `↑/↓` to move, `Enter` to open), live‑highlighted snippets that show *why* a file matched, and a portable build that runs on any Windows PC with **no Python install**.
+
+**Optional add‑on packs (DLC).** The base stays tiny and 100% offline; heavier extras (starting with a larger multilingual model) download **only when you click**, from this repo's releases, SHA‑256‑verified — see **Add‑ons** in the app.
 
 ## It learns *you* — on your machine
 
