@@ -4,9 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>本地语义搜索 · LocalSearch</title>
+<script>/* set theme before first paint to avoid a flash */
+(function(){try{var t=localStorage.getItem('ls_theme')||((window.matchMedia&&matchMedia('(prefers-color-scheme:dark)').matches)?'dark':'light');document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <style>
   :root { --bg:#f6f7f9; --card:#fff; --line:#e3e6ea; --fg:#1f2329; --mut:#6b7280;
-          --accent:#2563eb; --accent2:#1d4ed8; }
+          --accent:#2563eb; --accent2:#1d4ed8;
+          --btn:#fff; --soft:#f3f5f8; --chipbg:#eef2f7; --badgefg:#374151;
+          --snipfg:#374151; --bar:#e9edf3; --mark:#fde68a; --markfg:#1f2329;
+          --err:#b91c1c; --warn:#b45309; --persbg:#dbeafe; --persfg:#1e40af;
+          --sel:rgba(37,99,235,.18); color-scheme:light; }
+  :root[data-theme="dark"] {
+          --bg:#0f1216; --card:#171b21; --line:#2a2f37; --fg:#e6e9ee; --mut:#9aa4b2;
+          --accent:#3b82f6; --accent2:#60a5fa;
+          --btn:#1f242c; --soft:#1c2129; --chipbg:#232a33; --badgefg:#c3ccd7;
+          --snipfg:#c7cfda; --bar:#2a2f37; --mark:#6b5d1a; --markfg:#fef3c7;
+          --err:#f87171; --warn:#fbbf24; --persbg:#1e3a5f; --persfg:#bfdbfe;
+          --sel:rgba(59,130,246,.32); color-scheme:dark; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--fg);
          font:15px/1.5 system-ui,"Segoe UI","Microsoft YaHei",sans-serif; }
@@ -14,49 +27,49 @@
   h1 { font-size:22px; margin:0 0 2px; }
   .head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
   .sub { color:var(--mut); font-size:13px; margin-bottom:18px; }
-  .langbtn { flex:none; padding:6px 12px; border:1px solid var(--line); background:#fff;
+  .langbtn { flex:none; padding:6px 12px; border:1px solid var(--line); background:var(--btn);
              border-radius:8px; cursor:pointer; font-size:13px; color:var(--fg); }
   .langbtn:hover { border-color:var(--accent); color:var(--accent); }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
           padding:16px; margin-bottom:16px; }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   input[type=text] { flex:1; min-width:200px; padding:10px 12px; border:1px solid var(--line);
-                     border-radius:8px; font-size:15px; }
-  button { padding:9px 14px; border:1px solid var(--line); background:#fff; border-radius:8px;
-           cursor:pointer; font-size:14px; }
+                     border-radius:8px; font-size:15px; background:var(--btn); color:var(--fg); }
+  button { padding:9px 14px; border:1px solid var(--line); background:var(--btn); color:var(--fg);
+           border-radius:8px; cursor:pointer; font-size:14px; }
   button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
   button.primary:hover { background:var(--accent2); }
   button:disabled { opacity:.5; cursor:not-allowed; }
   .toggle { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-  .toggle button { border:0; border-radius:0; background:#fff; }
+  .toggle button { border:0; border-radius:0; background:var(--btn); }
   .toggle button.on { background:var(--accent); color:#fff; }
   .status { color:var(--mut); font-size:13px; }
-  .bar { height:8px; background:#e9edf3; border-radius:6px; overflow:hidden; margin-top:8px; display:none; }
+  .bar { height:8px; background:var(--bar); border-radius:6px; overflow:hidden; margin-top:8px; display:none; }
   .bar > div { height:100%; width:0; background:var(--accent); transition:width .2s; }
   .res { border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
-  .res.selected { border-color:var(--accent); box-shadow:0 0 0 2px rgba(37,99,235,.18); }
+  .res.selected { border-color:var(--accent); box-shadow:0 0 0 2px var(--sel); }
   .res .name { font-weight:600; }
   .res .path { color:var(--mut); font-size:12px; word-break:break-all; margin:2px 0 6px; }
-  .res .snip { font-size:13.5px; color:#374151; background:#f3f5f8; border-radius:6px; padding:8px 10px; }
+  .res .snip { font-size:13.5px; color:var(--snipfg); background:var(--soft); border-radius:6px; padding:8px 10px; }
   .res .acts { margin-top:8px; display:flex; gap:8px; }
   .res .acts button { padding:5px 10px; font-size:13px; }
   .score { color:var(--mut); font-size:12px; float:right; }
   .empty { color:var(--mut); padding:8px 2px; }
-  .err { color:#b91c1c; font-size:13px; }
+  .err { color:var(--err); font-size:13px; }
   .note { color:var(--mut); font-size:13px; margin-top:8px; }
-  .note.warn { color:#b45309; }
-  mark { background:#fde68a; color:#1f2329; border-radius:3px; padding:0 1px; }
-  select { padding:9px 8px; border:1px solid var(--line); border-radius:8px; font-size:14px; background:#fff; }
+  .note.warn { color:var(--warn); }
+  mark { background:var(--mark); color:var(--markfg); border-radius:3px; padding:0 1px; }
+  select { padding:9px 8px; border:1px solid var(--line); border-radius:8px; font-size:14px; background:var(--btn); color:var(--fg); }
   .meta { color:var(--mut); font-size:12px; margin:4px 0 0; display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-  .badge { background:#eef2f7; color:#374151; border-radius:4px; padding:1px 7px; font-size:11px; text-transform:uppercase; }
-  .badge.pers { background:#dbeafe; color:#1e40af; text-transform:none; }
-  .chip { display:inline-flex; align-items:center; gap:6px; background:#eef2f7; border:1px solid var(--line);
+  .badge { background:var(--chipbg); color:var(--badgefg); border-radius:4px; padding:1px 7px; font-size:11px; text-transform:uppercase; }
+  .badge.pers { background:var(--persbg); color:var(--persfg); text-transform:none; }
+  .chip { display:inline-flex; align-items:center; gap:6px; background:var(--chipbg); border:1px solid var(--line);
           border-radius:16px; padding:2px 6px 2px 10px; font-size:12px; margin:3px 4px 0 0; max-width:100%; }
   .chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:320px; }
   .chip button { border:0; background:transparent; padding:0 4px; font-size:13px; color:var(--mut); }
-  .chip button:hover { color:#b91c1c; }
+  .chip button:hover { color:var(--err); }
   .kbd { border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 4px;
-         font-size:11px; background:#fff; color:var(--mut); }
+         font-size:11px; background:var(--btn); color:var(--mut); }
 </style>
 </head>
 <body>
@@ -66,7 +79,10 @@
       <h1><span data-i18n="app_title">本地语义搜索</span> <span style="font-size:13px;color:var(--mut)">LocalSearch</span></h1>
       <div class="sub" data-i18n="app_sub">🔒 全部在本机运行，不联网，文件内容不会离开你的电脑。</div>
     </div>
-    <button class="langbtn" id="langBtn" onclick="toggleLang()">EN</button>
+    <div style="display:flex; gap:8px; flex:none">
+      <button class="langbtn" id="themeBtn" onclick="toggleTheme()" title="夜间模式 / Dark mode" aria-label="theme">🌙</button>
+      <button class="langbtn" id="langBtn" onclick="toggleLang()">EN</button>
+    </div>
   </div>
 
   <div class="card">
@@ -295,6 +311,14 @@ function t(key, p){
   return s;
 }
 function emsg(r){ return (r && r.code) ? t('err_'+r.code) : ((r && r.error) || t('generic_fail')); }
+function currentTheme(){ return document.documentElement.getAttribute('data-theme')==='dark' ? 'dark' : 'light'; }
+function setThemeIcon(){ const b=document.getElementById('themeBtn'); if(b) b.textContent = currentTheme()==='dark' ? '☀️' : '🌙'; }
+function toggleTheme(){
+  const next = currentTheme()==='dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  try{ localStorage.setItem('ls_theme', next); }catch(e){}
+  setThemeIcon();
+}
 function applyLang(){
   document.documentElement.lang = LANG==='zh' ? 'zh-CN' : 'en';
   document.querySelectorAll('[data-i18n]').forEach(el=>{ el.textContent = t(el.dataset.i18n); });
@@ -628,6 +652,7 @@ function escapeHtml(s){ return (''+(s==null?'':s)).replace(/[&<>"']/g, c=>(
 try{ const rec=JSON.parse(localStorage.getItem('ls_recent')||'[]');
   document.getElementById('recent').innerHTML = rec.map(x=>`<option value="${escapeHtml(x)}">`).join(''); }catch(e){}
 applyLang();
+setThemeIcon();
 loadDrives();
 setInterval(poll, 1000); poll();
 </script>
