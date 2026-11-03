@@ -119,7 +119,7 @@ def test_pptx_paragraphs_in_slide_order(tmp_path):
     sld = lambda t: f'<p:sld {A} xmlns:p="p"><a:p><a:r><a:t>{t}</a:t></a:r></a:p></p:sld>'
     f = _zip(tmp_path, "d.pptx", {"ppt/slides/slide10.xml": sld("ten"),
                                   "ppt/slides/slide2.xml": sld("two")})
-    assert parser.parse_file(f) == "two\nten"
+    assert parser.parse_file(f) == "two\n\f\nten"        # one page per slide
 
 
 def test_xlsx_one_line_per_string(tmp_path):
