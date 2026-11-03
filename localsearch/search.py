@@ -27,6 +27,7 @@ class Hit:
     pscore: float = None          # personalized score (set by Personalizer.rerank)
     personal: bool = False        # True if history boosted this hit
     page: int = None              # page/slide of the winning chunk (paged formats)
+    sim: float = None             # raw query-chunk cosine (absolute relevance signal)
 
 
 def _minmax(pairs, floor=None):
@@ -147,10 +148,51 @@ def make_snippets(hits, qvec, embedder, max_chars=260,
         h.snippet = _cut(best, local, max_chars)
 
 
-def retrieve(index, qvec, qtokens, top_k, alpha, fetch, allowed=None):
+_CJK_CH = re.compile(r"[぀-ヿ㐀-䶿一-鿿가-힯]")
+
+
+def text_lang(text):
+    """'cjk' or 'latin' by script share -- enough to tell the two groups apart."""
+    t = re.sub(r"\s+", "", text[:400])
+    return "cjk" if t and len(_CJK_CH.findall(t)) / len(t) > 0.3 else "latin"
+
+
+def lang_balance(dense, index, qlang, strength, k=10, info=None):
+    """Multilingual embedders score same-language text higher across the board
+    ("language bias"), so a Chinese query buries the English document it is
+    about. Shift the other-language group up by the gap between the two groups'
+    top-k mean similarity (times `strength`) before fusion."""
+    if not dense or strength <= 0:
+        return dense
+    groups = {}
+    for cid, s in dense:
+        meta = index.chunk_meta.get(cid)
+        if meta is not None:
+            groups.setdefault(text_lang(meta["text"]) == qlang, []).append(s)
+    if True not in groups or False not in groups:
+        return dense
+    top = lambda xs: sum(sorted(xs, reverse=True)[:k]) / min(k, len(xs))
+    shift = strength * (top(groups[True]) - top(groups[False]))
+    if shift <= 0:
+        return dense
+    if info is not None:
+        info.update(shift=shift, qlang=qlang)
+    out = []
+    for cid, s in dense:
+        meta = index.chunk_meta.get(cid)
+        same = meta is None or text_lang(meta["text"]) == qlang
+        out.append((cid, s if same else s + shift))
+    return sorted(out, key=lambda x: -x[1])
+
+
+def retrieve(index, qvec, qtokens, top_k, alpha, fetch, allowed=None,
+             query_text=None, balance=0.0, info=None):
     """Hybrid retrieval -> top_k files with best chunk; call under the lock.
-    `allowed`: optional int64 array of chunk ids (query filters)."""
+    `allowed`: optional int64 array of chunk ids (query filters); `info`
+    (dict) receives the language-balance shift, if one was applied."""
     dense = index.search_dense(qvec, fetch, allowed)
+    if balance and query_text:
+        dense = lang_balance(dense, index, text_lang(query_text), balance, info=info)
     bm25 = index.search_bm25(qtokens, fetch, allowed)
     # fewer matches than `fetch`: the unreturned chunks score 0, so normalize
     # against 0 -- exactly what the zero-padded rank_bm25 top-k used to give

@@ -459,6 +459,12 @@ def create_app(index_dir, config=None):
             res = [_result(h.path, snippet=h.snippet or _snippet(h.chunk_text),
                            score=round(h.score, 3), terms=h.terms, personal=h.personal,
                            page=h.page) for h in hits]
+            sims = [h.sim for h in hits if h.sim is not None]
+            if sims:           # calibrated relevance floor: dim (never hide) the weak tail
+                top = max(sims)
+                for r, h in zip(res, hits):
+                    if r is not None and h.sim is not None:
+                        r["low"] = top - h.sim > engine.cfg.relevance_gap
         res = [r for r in res if r is not None]
         state.remember_shown(r["path"] for r in res)
         out = dict(results=res, mode_used=used, **meta)

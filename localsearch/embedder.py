@@ -98,8 +98,12 @@ class Embedder:
         self.model = None
         self._ox = None
         onnx = _onnx_file(config.model_name)
-        device = config.resolved_device()
-        if onnx is not None and device == "cpu" and _has("onnxruntime"):
+        want = getattr(config, "backend", "auto")
+        device = "cpu" if want == "onnx" else config.resolved_device()
+        if want == "onnx" and onnx is None:
+            raise FileNotFoundError("backend=onnx but no model.onnx in %s" % config.model_name)
+        if (onnx is not None and device == "cpu" and want != "torch"
+                and _has("onnxruntime")):
             self.backend, self.device = "onnx", "cpu"
             log.info("loading embedder %s (onnxruntime) ...", onnx)
             self._ox = OnnxBackend(config.model_name, onnx)

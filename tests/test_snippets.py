@@ -52,3 +52,22 @@ def test_api_search_then_snippets(fake_embedder, corpus, tmp_path):
     assert set(snips) <= {x["path"] for x in r["results"]} and snips
     assert c.post("/api/snippets", json={"id": "nope"}).get_json() == {"snippets": {}}
     engine.close()
+
+
+def test_api_marks_the_weak_tail(fake_embedder, tmp_path):
+    from conftest import settle
+    from localsearch import app as A
+    d = tmp_path / "docs"
+    d.mkdir()
+    (d / "hit.txt").write_text("reservoir water level record low drought", encoding="utf-8")
+    for i in range(4):
+        (d / f"other{i}.txt").write_text(f"quarterly invoice approval workflow item {i}",
+                                         encoding="utf-8")
+    app, engine, state = A.create_app(tmp_path / "idx")
+    settle(state)
+    engine.build([d])
+    res = app.test_client().post("/api/search", json={"query": "reservoir water level drought",
+                                                      "mode": "semantic"}).get_json()["results"]
+    assert res[0]["name"] == "hit.txt" and res[0]["low"] is False
+    assert all(r["low"] for r in res[1:])
+    engine.close()

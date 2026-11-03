@@ -652,10 +652,19 @@ class SearchEngine:
                 self.index.ensure_bm25()       # library use; the app pre-builds it
             # else: still building in the background -> dense-only for now rather
             # than stalling every search (and the status poll) on the lock
+            info = {}
             hits = retrieve(self.index, qvec, qtokens, want,
-                            self.cfg.alpha, self.cfg.fusion_fetch, allowed)
-            vecs = ({h.path: self._reconstruct(h.cid) for h in hits}
-                    if self.personalizer.enabled else {})
+                            self.cfg.alpha, self.cfg.fusion_fetch, allowed,
+                            query_text=query, balance=self.cfg.lang_balance, info=info)
+            vecs = {h.path: self._reconstruct(h.cid) for h in hits}
+            from .search import text_lang
+            for h in hits:      # fused scores are relative; cosine is the absolute signal
+                v = vecs.get(h.path)
+                h.sim = float(v @ qvec[0]) if v is not None else None
+                if h.sim is not None and info and text_lang(h.chunk_text) != info["qlang"]:
+                    h.sim += info["shift"]       # same scale as same-language hits
+            if not self.personalizer.enabled:
+                vecs = {}
         hits = self._personalize(hits, vecs, top_k)
         if snippets == "semantic":
             make_snippets(hits, qvec, self.embedder,

@@ -52,6 +52,8 @@
   .res .path { color:var(--mut); font-size:12px; word-break:break-all; margin:2px 0 6px; }
   .res .snip { font-size:13.5px; color:var(--snipfg); background:var(--soft); border-radius:6px; padding:8px 10px; transition:opacity .25s; }
   .res .snip.pending { opacity:.6; }
+  .res.low { opacity:.55; }
+  .lowsep { color:var(--mut); font-size:12px; margin:14px 2px 8px; border-top:1px dashed var(--line); padding-top:8px; }
   .res .acts { margin-top:8px; display:flex; gap:8px; }
   .res .acts button { padding:5px 10px; font-size:13px; }
   .score { color:var(--mut); font-size:12px; float:right; }
@@ -122,7 +124,7 @@
 
   <div class="card">
     <div class="row">
-      <input id="q" type="text" list="recent" autofocus data-i18n-ph="ph_query" onkeydown="qKey(event)">
+      <input id="q" type="text" list="recent" autofocus data-i18n-ph="ph_query" onkeydown="qKey(event)" oninput="liveSearch()">
       <datalist id="recent"></datalist>
       <span class="toggle">
         <button id="mInstant" class="on" onclick="setMode('instant')" data-i18n="mode_instant" data-i18n-title="ttl_instant">全盘语义</button>
@@ -206,7 +208,7 @@ const I18N = {
     em_tip_instant:" 「全盘语义」靠 Windows 索引找候选，纯改写 / 跨语言（零字面重合）可能召不回——想按纯意思搜，请把该文件夹加进「深度语义」（掌控模式）再搜。",
     em_tip_filename:" 试试切到「全盘语义」按内容/意思查找。",
     em_tip_semantic:" 换个说法，或确认这个文件夹已经建好索引。",
-    res_score:"匹配度 {score}", res_modified:"修改于 {mtime}", res_page:"第 {n} 页", btn_openpage:"打开到第 {n} 页",
+    low_sep:"以下结果与查询的相关度明显较低", res_score:"匹配度 {score}", res_modified:"修改于 {mtime}", res_page:"第 {n} 页", btn_openpage:"打开到第 {n} 页",
     btn_open:"打开文件", btn_reveal:"打开所在文件夹",
     err_bad_folder:"这不是一个有效的文件夹。", err_busy:"正在扫描中，请稍候（或先取消）。",
     err_not_controlled:"不在掌控列表中。", err_no_folders:"还没有掌控任何文件夹。",
@@ -286,7 +288,7 @@ const I18N = {
     em_tip_instant:" Whole-disk Semantic finds candidates via the Windows index, so a pure paraphrase / cross-language query (zero shared words) may miss — add that folder to Deep Semantic (Control mode) to search by meaning only.",
     em_tip_filename:" Try Whole-disk Semantic to search by content / meaning.",
     em_tip_semantic:" Try different wording, or make sure this folder has been indexed.",
-    res_score:"score {score}", res_modified:"modified {mtime}", res_page:"p. {n}", btn_openpage:"Open at p. {n}",
+    low_sep:"Results below are clearly less related to your query", res_score:"score {score}", res_modified:"modified {mtime}", res_page:"p. {n}", btn_openpage:"Open at p. {n}",
     btn_open:"Open file", btn_reveal:"Open containing folder",
     err_bad_folder:"That is not a valid folder.", err_busy:"Indexing in progress, please wait (or cancel first).",
     err_not_controlled:"Not in the controlled list.", err_no_folders:"No folders are being controlled yet.",
@@ -639,7 +641,9 @@ function renderResults(items, mode){
     box.innerHTML = '<div class="empty">' + t('em_none') + tip + '</div>';
     return;
   }
+  let sepDone = false;
   box.innerHTML = items.map(it=>{
+    const sep = (it.low && !sepDone)? (sepDone=true, `<div class="lowsep">${escapeHtml(t('low_sep'))}</div>`) : '';
     const score = it.score!=null? `<span class="score">${escapeHtml(t('res_score', {score:it.score}))}</span>`:'';
     const meta = [
       it.personal? `<span class="badge pers" title="${escapeHtml(t('ttl_pers'))}">${escapeHtml(t('badge_personal'))}</span>`:'',
@@ -649,7 +653,7 @@ function renderResults(items, mode){
       it.mtime? escapeHtml(t('res_modified', {mtime:it.mtime})):''
     ].filter(Boolean).join('<span style="opacity:.5">·</span>');
     const snip = it.snippet? `<div class="snip${it.snipPending?' pending':''}">${highlight(it.snippet, it.terms)}</div>`:'';
-    return `<div class="res" data-path="${escapeHtml(it.path)}">${score}<div class="name">${escapeHtml(it.name)}</div>
+    return `${sep}<div class="res${it.low?' low':''}" data-path="${escapeHtml(it.path)}">${score}<div class="name">${escapeHtml(it.name)}</div>
       <div class="meta">${meta}</div>
       <div class="path">${escapeHtml(it.path)}</div>${snip}
       <div class="acts">
@@ -660,12 +664,12 @@ function renderResults(items, mode){
       </div></div>`;
   }).join('');
 }
-async function doSearch(){
+async function doSearch(live){
   const q=document.getElementById('q').value.trim();
   const box=document.getElementById('results'); const err=document.getElementById('searchErr');
   err.textContent='';
   if(!q){ box.innerHTML=''; LAST_RESULTS=null; LAST_RESP=null; renderFilters(null); return; }
-  addRecent(q);
+  if(!live) addRecent(q);
   LAST_QUERY=q; SEL=-1;
   const mode=MODE;
   const my = ++SEQ;
@@ -683,6 +687,17 @@ async function doSearch(){
   if(r.snip_id) upgradeSnippets(r.snip_id, my);
 }
 let LAST_RESP = null;
+// search as you type: results now arrive in ~10-20 ms (snippets follow), so
+// Deep / Filename modes can run live. Whole-disk mode embeds ~120 Windows
+// Search candidates per query (~1.4 s on a CPU), so it stays on Enter.
+let LIVE_T = null;
+function liveSearch(){
+  clearTimeout(LIVE_T);
+  if(MODE==='instant') return;
+  const q = document.getElementById('q').value.trim();
+  if(q.length < 2 || q === LAST_QUERY) return;
+  LIVE_T = setTimeout(()=>{ if(document.getElementById('q').value.trim()===q) doSearch(true); }, 250);
+}
 // "what could not be read" -- so missing formats are visible, not silent
 const IMG_EXT = ['.png','.jpg','.jpeg','.bmp','.tif','.tiff','.gif','.webp'];
 function coverageText(lb){
@@ -740,6 +755,8 @@ document.getElementById('fltRow').addEventListener('click', ev=>{
 // results render immediately with a quick keyword snippet; the semantic
 // "best sentence" (the slow, model-bound part) replaces it when ready
 async function upgradeSnippets(id, my){
+  await new Promise(res=>setTimeout(res, 120));   // still typing? don't spend CPU on it
+  if(my!==SEQ) return;
   let r; try{ r = await api('/api/snippets', {id}); }catch(e){ r = null; }
   if(my!==SEQ || !LAST_RESULTS) return;
   const snips = (r && r.snippets) || {};

@@ -10,10 +10,18 @@ class Config:
     query_prefix: str = "query: "             # multilingual-e5 wants both prefixes
     doc_prefix: str = "passage: "
     device: str = "auto"
+    backend: str = "auto"                 # auto | onnx | torch (see embedder.py)
     embed_batch_size: int = 128           # chunks gathered across files per embed call
     encode_batch_size: int = 0            # model batch; 0 = auto (CPU 16, GPU 128)
 
-    alpha: float = 0.7
+    # Fusion weights, tuned on eval/scry_eval_v1.json (scripts/eval.py): dense
+    # 0.8 + language balance lifted MRR 0.746 -> 0.948 (cross-language R@1
+    # 0.13 -> 0.77) without costing exact-phrase or monolingual queries.
+    alpha: float = 0.8
+    lang_balance: float = 1.0         # cross-language bias correction (see search.py)
+    relevance_gap: float = 0.05       # UI dims deep hits whose (balanced) cosine is this far
+                                      # below the best one; on the eval set no relevant hit
+                                      # was further than 0.012, 54% of irrelevant ones were
     fusion_fetch: int = 100
     instant_candidates: int = 120
 
