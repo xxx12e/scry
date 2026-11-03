@@ -133,6 +133,7 @@ Scry is **multilingual** — one model covering 100+ languages, so you can searc
 localsearch/          the engine + local web UI (this is the product)
   ├─ engine.py        orchestrator: scan → parse → chunk → embed → index → search
   ├─ index.py         dual index: fp16 FAISS dense + BM25, crash‑durable persistence
+  ├─ bm25.py          incremental BM25 (inverted index; edits never refit)
   ├─ winsearch.py     the "instant whole‑disk" breakthrough (Windows content index)
   ├─ search.py        hybrid retrieval + best‑sentence snippets
   ├─ watcher.py       debounced background re‑indexing
@@ -140,6 +141,7 @@ localsearch/          the engine + local web UI (this is the product)
   ├─ app.py           Flask backend (127.0.0.1 only) + JSON API
   └─ web/index.html   single‑page UI, bilingual, zero build step
 demo_*.py             runnable end‑to‑end examples (incl. demo_personalize.py)
+tests/                pytest suite (any OS, no model download): python -m pytest
 run.bat               double‑click launcher
 ```
 

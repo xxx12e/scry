@@ -42,10 +42,11 @@ dropped. A fresh `SearchEngine(same_dir)` loads from disk — no rebuild.
 | module | responsibility |
 |---|---|
 | `config.py` | factory defaults + all tunables (model, α, chunk size, caps, exclude dirs) |
-| `parser.py` | robust text extraction: txt / md / pdf (PyMuPDF) / docx (python‑docx) |
-| `chunker.py` | CJK‑aware sentence chunking + BM25 tokenizer (words + CJK bigrams, interned) |
+| `parser.py` | robust text extraction, 10 formats: txt / md / csv (BOM → UTF‑8 → GBK sniff → system ANSI code page) · pdf (PyMuPDF) · docx / xlsx / pptx (stdlib OOXML: tables, headers, text boxes, one line per paragraph) · html (meta charset, block structure) · rtf (`\ansicpg` / `\fcharset` / `\uN` decoding) · images (opt‑in Windows OCR) |
+| `chunker.py` | CJK‑aware sentence chunking with a hard size cap (no chunk the model would truncate) + BM25 tokenizer (Unicode words, case/diacritic‑folded, + CJK bigrams) |
 | `embedder.py` | e5 wrapper (resident; query/passage prefixing; fp16‑checkpoint safe) |
 | `index.py` | `DualIndex`: fp16 FAISS dense (exact) + BM25 + file→chunk map + crash‑durable persistence |
+| `bm25.py` | incremental Okapi BM25 (scores identical to `rank_bm25`): numpy CSR base + live delta + tombstones — queries touch only their terms' postings, edits never refit |
 | `search.py` | hybrid fusion → files + best‑sentence snippets; `es.exe` filename search |
 | `winsearch.py` | Windows Search content index (`Search.CollatorDSO`) for instant global mode |
 | `watcher.py` | single debounced scheduler thread → incremental updates |
@@ -89,7 +90,7 @@ See [`../requirements.txt`](../requirements.txt). Filename mode also needs
 Bundle everything into a single self‑contained folder (no Python needed on the target):
 
 - **PyInstaller onedir**, CPU‑only torch.
-- Bundle as data: `web/`, `tools/es.exe`, and the model dir (`models/bge-base`) — resolved
+- Bundle as data: `web/`, `tools/es.exe`, and the model dir (`models/embed`) — resolved
   at runtime via `resources.py` (`sys._MEIPASS` when frozen).
 - Ship the model as **fp16** on disk and upcast to fp32 at load (halves the asset; CPU
   compute stays fp32). `torch` and `transformers` must keep their loose source (both read
@@ -101,8 +102,30 @@ Bundle everything into a single self‑contained folder (no Python needed on the
 ## Scope
 
 Small local models cap semantic quality below datacenter LLMs — that's the trade for
-"instant, private, offline." Flat FAISS + `rank_bm25` are exact and great to ~10⁴–10⁵
-chunks; `DualIndex` is the single seam to swap dense → ANN and BM25 → an inverted index at
-larger scale. Bundled model is multilingual (`multilingual-e5-small`, 100+ languages);
-cross‑language retrieval is strong but has a mild same‑language bias. No OCR; four formats
-(txt/md/pdf/docx) — deliberately.
+"instant, private, offline." Flat FAISS is exact and great to ~10⁴–10⁵ chunks (`DualIndex` is
+the single seam to swap dense → ANN at larger scale); the BM25 arm is an incremental inverted
+index (`bm25.py`) whose query cost depends on the query's terms, not the corpus size. Bundled
+model is multilingual (`multilingual-e5-small`, 100+ languages); cross‑language retrieval is
+strong but has a mild same‑language bias. 10 formats + opt‑in image OCR (Windows built‑in engine).
+
+## Local API safety
+
+The server binds `127.0.0.1`, and additionally rejects any request whose `Host` or `Origin` is
+not a loopback name — so a web page open in your browser can neither drive the API cross‑site
+nor reach it via DNS rebinding. `/api/open` only launches files that a search actually returned.
+
+## Settings
+
+`<index_dir>/settings.json`: `ocr` (bool) and `startup_rescan` (bool, default `true` — a diff
+scan of the controlled folders right after the model loads, so edits made while the app was
+closed are picked up; unchanged files are skipped and nothing is rewritten).
+
+## Tests
+
+```bash
+pip install -r requirements.txt pytest rank-bm25   # rank-bm25 only as the BM25 reference
+python -m pytest
+```
+
+The suite runs on any OS without the model (a hashing stand‑in embedder); Windows‑only pieces
+(Windows Search, OCR, `os.startfile`) are covered by the `demo_*.py` / `test_ocr.py` scripts.

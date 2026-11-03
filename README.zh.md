@@ -132,6 +132,7 @@ Scry 是**多语**的——一个模型覆盖 100+ 种语言，所以你能用�
 localsearch/          引擎 + 本地网页界面（这就是产品本体）
   ├─ engine.py        总调度：扫描 → 解析 → 分块 → 嵌入 → 索引 → 搜索
   ├─ index.py         双索引：fp16 FAISS 稠密 + BM25，防掉电持久化
+  ├─ bm25.py          增量 BM25（倒排索引；改文件不再整体重建）
   ├─ winsearch.py     "即时全盘"的关键突破（Windows 内容索引）
   ├─ search.py        混合检索 + 最佳句片段
   ├─ watcher.py       防抖后台增量重索引
@@ -139,6 +140,7 @@ localsearch/          引擎 + 本地网页界面（这就是产品本体）
   ├─ app.py           Flask 后端（仅 127.0.0.1）+ JSON API
   └─ web/index.html   单页界面，双语，零构建步骤
 demo_*.py             可直接运行的端到端示例（含 demo_personalize.py）
+tests/                pytest 测试（任意系统、无需下载模型）：python -m pytest
 run.bat               双击启动
 ```
 
