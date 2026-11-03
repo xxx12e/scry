@@ -50,7 +50,8 @@
   .res.selected { border-color:var(--accent); box-shadow:0 0 0 2px var(--sel); }
   .res .name { font-weight:600; }
   .res .path { color:var(--mut); font-size:12px; word-break:break-all; margin:2px 0 6px; }
-  .res .snip { font-size:13.5px; color:var(--snipfg); background:var(--soft); border-radius:6px; padding:8px 10px; }
+  .res .snip { font-size:13.5px; color:var(--snipfg); background:var(--soft); border-radius:6px; padding:8px 10px; transition:opacity .25s; }
+  .res .snip.pending { opacity:.6; }
   .res .acts { margin-top:8px; display:flex; gap:8px; }
   .res .acts button { padding:5px 10px; font-size:13px; }
   .score { color:var(--mut); font-size:12px; float:right; }
@@ -612,7 +613,7 @@ function renderResults(items, mode){
       it.size? `${escapeHtml(it.size)}`:'',
       it.mtime? escapeHtml(t('res_modified', {mtime:it.mtime})):''
     ].filter(Boolean).join('<span style="opacity:.5">·</span>');
-    const snip = it.snippet? `<div class="snip">${highlight(it.snippet, it.terms)}</div>`:'';
+    const snip = it.snippet? `<div class="snip${it.snipPending?' pending':''}">${highlight(it.snippet, it.terms)}</div>`:'';
     return `<div class="res" data-path="${escapeHtml(it.path)}">${score}<div class="name">${escapeHtml(it.name)}</div>
       <div class="meta">${meta}</div>
       <div class="path">${escapeHtml(it.path)}</div>${snip}
@@ -639,7 +640,22 @@ async function doSearch(){
   if(my!==SEQ) return;
   err.textContent = r.error? emsg(r) : '';
   LAST_RESULTS = r.results||[]; LAST_MODE = mode;
+  if(r.snip_id) LAST_RESULTS.forEach(it=>{ it.snipPending = true; });
   renderResults(LAST_RESULTS, mode);
+  if(r.snip_id) upgradeSnippets(r.snip_id, my);
+}
+// results render immediately with a quick keyword snippet; the semantic
+// "best sentence" (the slow, model-bound part) replaces it when ready
+async function upgradeSnippets(id, my){
+  let r; try{ r = await api('/api/snippets', {id}); }catch(e){ r = null; }
+  if(my!==SEQ || !LAST_RESULTS) return;
+  const snips = (r && r.snippets) || {};
+  LAST_RESULTS.forEach(it=>{ if(snips[it.path]) it.snippet = snips[it.path]; it.snipPending = false; });
+  document.querySelectorAll('#results .res').forEach(el=>{
+    const it = LAST_RESULTS.find(x=>x.path===el.dataset.path);
+    const box = el.querySelector('.snip');
+    if(it && box){ box.innerHTML = highlight(it.snippet, it.terms); box.classList.remove('pending'); }
+  });
 }
 async function openPath(path, reveal){
   const r = await api('/api/open', {path, reveal});

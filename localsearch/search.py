@@ -45,15 +45,66 @@ def _split_sentences(text):
     return [s.strip() for s in _SENT_SPLIT.split(text) if s and s.strip()]
 
 
+class VecCache:
+    """Small thread-safe LRU of text -> embedding (sentences, queries): refining
+    a query re-ranks mostly the same files, so their sentences are reused."""
+
+    def __init__(self, cap=20000):
+        import threading
+        from collections import OrderedDict
+        self.cap, self._d, self._lock = cap, OrderedDict(), threading.Lock()
+
+    def get_many(self, keys):
+        with self._lock:
+            out = []
+            for k in keys:
+                v = self._d.get(k)
+                if v is not None:
+                    self._d.move_to_end(k)
+                out.append(v)
+            return out
+
+    def put_many(self, keys, vecs):
+        with self._lock:
+            for k, v in zip(keys, vecs):
+                self._d[k] = v
+                self._d.move_to_end(k)
+            while len(self._d) > self.cap:
+                self._d.popitem(last=False)
+
+
+def _cut(best, local, max_chars):
+    snip = best[:max_chars] + ("…" if len(best) > max_chars else "")
+    return ("…" + snip) if local > 0 else snip
+
+
+def lexical_snippet(chunk_text, qtokens, max_chars=260, max_sents=16):
+    """Instant, model-free snippet: the sentence sharing the most query terms
+    (the chunk's first sentence when nothing overlaps). Shown while the
+    semantic snippet is computed."""
+    sents = _split_sentences(chunk_text)[:max_sents]
+    if not sents:
+        return _cut(chunk_text, 0, max_chars)
+    q = set(qtokens or ())
+    best_i, best_n = 0, 0
+    if q:
+        for i, s in enumerate(sents):
+            n = len(q.intersection(tokenize(s)))
+            if n > best_n:
+                best_i, best_n = i, n
+    return _cut(sents[best_i], best_i, max_chars)
+
+
 def make_snippets(hits, qvec, embedder, max_chars=260,
-                  max_sent_chars=300, max_sents=16):
-    """Set each hit's snippet to its most query-relevant sentence (bounded cost)."""
+                  max_sent_chars=300, max_sents=16, cache=None):
+    """Set each hit's snippet to its most query-relevant sentence (bounded cost).
+    `cache` (VecCache) skips re-embedding sentences seen in earlier searches."""
     sent_lists = []
     for h in hits:
         sents = _split_sentences(h.chunk_text)[:max_sents]
         if len(sents) <= 1:
             best = sents[0] if sents else h.chunk_text
-            h.snippet = best[:max_chars] + ("…" if len(best) > max_chars else "")
+            h.snippet = _cut(best, 0, max_chars)
             sent_lists.append(None)
         else:
             sent_lists.append(sents)
@@ -66,23 +117,33 @@ def make_snippets(hits, qvec, embedder, max_chars=260,
             owner.append(i)
     if not flat:
         return
-    embs = embedder.embed_docs(flat)
+    if cache is not None:
+        got = cache.get_many(flat)
+        miss = [j for j, v in enumerate(got) if v is None]
+        if miss:
+            new = embedder.embed_docs([flat[j] for j in miss])
+            cache.put_many([flat[j] for j in miss], list(new))
+            for k, j in enumerate(miss):
+                got[j] = new[k]
+        embs = np.vstack(got)
+    else:
+        embs = embedder.embed_docs(flat)
     sims = embs @ qvec[0]
     best_idx = {}
     best_sim = {}
     for j, i in enumerate(owner):
         if sims[j] > best_sim.get(i, -1e9):
             best_sim[i], best_idx[i] = sims[j], j
+    first = {}
+    for j, i in enumerate(owner):
+        first.setdefault(i, j)
     for i, h in enumerate(hits):
         sents = sent_lists[i]
         if sents is None:
             continue
-        local = sum(1 for k in range(best_idx[i]) if owner[k] == i)
+        local = best_idx[i] - first[i]
         best = sents[local] if local < len(sents) else sents[0]
-        snip = best[:max_chars] + ("…" if len(best) > max_chars else "")
-        if local > 0:
-            snip = "…" + snip
-        h.snippet = snip
+        h.snippet = _cut(best, local, max_chars)
 
 
 def retrieve(index, qvec, qtokens, top_k, alpha, fetch):

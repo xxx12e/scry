@@ -17,7 +17,8 @@ from .parser import parse_file, is_supported
 from .chunker import chunk_text, tokenize
 from .embedder import Embedder
 from .index import DualIndex, IndexVersionError, IndexCorruptError
-from .search import retrieve, make_snippets, filename_search, Hit
+from .search import (retrieve, make_snippets, lexical_snippet, filename_search, Hit,
+                     VecCache)
 from .personalize import Personalizer, _norm
 from . import dlc
 
@@ -57,6 +58,10 @@ class SearchEngine:
         self._instant_cache = OrderedDict()
         self._cache_lock = threading.Lock()
         self.personalizer = Personalizer(self.index_dir, self.cfg)
+        self._sent_cache = VecCache(20000)  # sentence -> vec (snippets of refined queries)
+        self._q_cache = VecCache(256)       # query -> vec
+        self._snip_jobs = OrderedDict()     # id -> deferred snippet work (progressive UI)
+        self._snip_lock = threading.Lock()
         self._last_shown = OrderedDict()  # normcased path -> vec (recent shown, for record_open)
         self._shown_lock = threading.Lock()
         self.load_error = ""
@@ -524,10 +529,21 @@ class SearchEngine:
             raise
 
 
-    def search_semantic(self, query, top_k=10):
+    def _qvec(self, query):
+        v = self._q_cache.get_many([query])[0]
+        if v is None:
+            v = self.embedder.embed_query(query)
+            self._q_cache.put_many([query], [v])
+        return v
+
+    def search_semantic(self, query, top_k=10, snippets="semantic"):
+        """Hybrid deep search. snippets="semantic" embeds each hit's sentences to
+        pick the best one (~95% of a CPU query's time); "lexical" returns at once
+        with a term-overlap snippet -- pair it with queue_snippets() and
+        resolve_snippets() to upgrade them progressively."""
         if self.index is None or self.index.dense.ntotal == 0:
             return []
-        qvec = self.embedder.embed_query(query)
+        qvec = self._qvec(query)
         qtokens = tokenize(query)
         # pull a wider pool when personalizing, so the personal prior can lift a
         # genuinely-relevant file the base score ranked just below the cut.
@@ -544,10 +560,45 @@ class SearchEngine:
             vecs = ({h.path: self._reconstruct(h.cid) for h in hits}
                     if self.personalizer.enabled else {})
         hits = self._personalize(hits, vecs, top_k)
-        make_snippets(hits, qvec, self.embedder,
-                      max_sent_chars=self.cfg.snippet_sentence_chars,
-                      max_sents=self.cfg.snippet_sents_per_hit)
+        if snippets == "semantic":
+            make_snippets(hits, qvec, self.embedder,
+                          max_sent_chars=self.cfg.snippet_sentence_chars,
+                          max_sents=self.cfg.snippet_sents_per_hit, cache=self._sent_cache)
+        else:
+            for h in hits:
+                h.snippet = lexical_snippet(h.chunk_text, qtokens,
+                                            max_sents=self.cfg.snippet_sents_per_hit)
         return hits
+
+    # ---- progressive snippets ----
+    def queue_snippets(self, mode, query, hits):
+        """Remember hits whose semantic snippets the UI will ask for next;
+        returns an id for resolve_snippets() (bounded, one-shot)."""
+        import secrets
+        sid = secrets.token_hex(8)
+        job = (mode, query, [Hit(h.path, h.score, h.chunk_text, h.char_start, h.char_end,
+                                 snippet=h.snippet, terms=h.terms) for h in hits])
+        with self._snip_lock:
+            self._snip_jobs[sid] = job
+            while len(self._snip_jobs) > 16:
+                self._snip_jobs.popitem(last=False)
+        return sid
+
+    def resolve_snippets(self, sid):
+        """{path: best snippet} for a queued result set ({} if unknown/expired)."""
+        with self._snip_lock:
+            job = self._snip_jobs.pop(sid, None)
+        if job is None:
+            return {}
+        mode, query, hits = job
+        qvec = self._qvec(query)
+        if mode == "instant":
+            self._deepen_instant_snippets(hits, qvec)
+        else:
+            make_snippets(hits, qvec, self.embedder,
+                          max_sent_chars=self.cfg.snippet_sentence_chars,
+                          max_sents=self.cfg.snippet_sents_per_hit, cache=self._sent_cache)
+        return {h.path: h.snippet for h in hits}
 
     def search_filename(self, query, limit=50, scope=None):
         q = query
@@ -618,14 +669,15 @@ class SearchEngine:
                     cache.popitem(last=False)
         return texts, np.vstack(rows)
 
-    def search_instant_global(self, query, top_k=20, candidates=None, scope=None):
+    def search_instant_global(self, query, top_k=20, candidates=None, scope=None,
+                              deepen=True):
         """Whole-disk semantic search, no pre-indexing (Windows Search + e5 rerank)."""
         from . import winsearch
         cands = winsearch.query(query, limit=candidates or self.cfg.instant_candidates,
                                 scope=scope, min_results=top_k)
         if not cands:
             return []
-        qvec = self.embedder.embed_query(query)
+        qvec = self._qvec(query)
         texts, cvecs = self._embed_candidates(cands)
         sims = cvecs @ qvec[0]
         want = top_k * 3 if self.personalizer.enabled else top_k
@@ -639,7 +691,7 @@ class SearchEngine:
                             char_start=0, char_end=0, snippet=text[:260], terms=qtokens))
             vecs[path] = cvecs[int(i)]
         hits = self._personalize(hits, vecs, top_k)
-        if self.cfg.instant_deep_snippet:
+        if deepen and self.cfg.instant_deep_snippet:
             self._deepen_instant_snippets(hits, qvec)
         return hits
 

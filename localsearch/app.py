@@ -404,6 +404,7 @@ def create_app(index_dir, config=None):
         scope = (d.get("scope") or "").strip() or None
         if not q:
             return jsonify(results=[])
+        sid = None
         if mode == "filename":
             paths = engine.search_filename(q, limit=k, scope=scope)
             if paths is None:
@@ -414,18 +415,35 @@ def create_app(index_dir, config=None):
             if not ws_available:
                 return jsonify(results=[], code="ws_down",
                                error="Windows Search service is off.")
-            hits = engine.search_instant_global(q, top_k=k, scope=scope)
+            hits = engine.search_instant_global(q, top_k=k, scope=scope, deepen=False)
             if not hits:
                 return jsonify(results=[], code="no_hits", error="No content matches.")
+            sid = engine.queue_snippets("instant", q, hits) if engine.cfg.instant_deep_snippet else None
             res = [_result(h.path, snippet=h.snippet, score=round(h.score, 3),
                            terms=h.terms, personal=h.personal) for h in hits]
         else:
-            hits = engine.search_semantic(q, top_k=k)
+            # results first (~tens of ms); the semantic snippets follow via
+            # /api/snippets -- they were ~95% of a CPU query's time
+            hits = engine.search_semantic(q, top_k=k, snippets="lexical")
+            sid = engine.queue_snippets("semantic", q, hits) if hits else None
             res = [_result(h.path, snippet=h.snippet or _snippet(h.chunk_text),
                            score=round(h.score, 3), terms=h.terms, personal=h.personal) for h in hits]
         res = [r for r in res if r is not None]
         state.remember_shown(r["path"] for r in res)
-        return jsonify(results=res)
+        out = dict(results=res)
+        if mode != "filename" and sid:
+            out["snip_id"] = sid
+        return jsonify(**out)
+
+    @app.post("/api/snippets")
+    def snippets():
+        """Second half of a search: the semantic best-sentence snippets."""
+        sid = str(_body().get("id") or "")
+        try:
+            return jsonify(snippets=engine.resolve_snippets(sid) if sid else {})
+        except Exception as e:
+            log.warning("snippets failed: %s", e)
+            return jsonify(snippets={})
 
     @app.post("/api/open")
     def open_path():
