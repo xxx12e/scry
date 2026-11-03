@@ -50,7 +50,13 @@
   .res.selected { border-color:var(--accent); box-shadow:0 0 0 2px var(--sel); }
   .res .name { font-weight:600; }
   .res .path { color:var(--mut); font-size:12px; word-break:break-all; margin:2px 0 6px; }
-  .res .snip { font-size:13.5px; color:var(--snipfg); background:var(--soft); border-radius:6px; padding:8px 10px; }
+  .res .snip { font-size:13.5px; color:var(--snipfg); background:var(--soft); border-radius:6px; padding:8px 10px; transition:opacity .25s; }
+  .res .snip.pending { opacity:.6; }
+  .res.low { opacity:.55; }
+  a.cite { color:var(--accent); text-decoration:none; font-size:12.5px; margin-right:6px; cursor:pointer; }
+  a.cite:hover { text-decoration:underline; }
+  .res .thumb { display:block; max-width:240px; max-height:180px; border-radius:6px; margin:6px 0; border:1px solid var(--line); }
+  .lowsep { color:var(--mut); font-size:12px; margin:14px 2px 8px; border-top:1px dashed var(--line); padding-top:8px; }
   .res .acts { margin-top:8px; display:flex; gap:8px; }
   .res .acts button { padding:5px 10px; font-size:13px; }
   .score { color:var(--mut); font-size:12px; float:right; }
@@ -68,6 +74,8 @@
   .chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:320px; }
   .chip button { border:0; background:transparent; padding:0 4px; font-size:13px; color:var(--mut); }
   .chip button:hover { color:var(--err); }
+  code { font-size:12px; background:var(--chipbg); border-radius:4px; padding:0 4px; }
+  .chip.flt { background:var(--persbg); color:var(--persfg); }
   .kbd { border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 4px;
          font-size:11px; background:var(--btn); color:var(--mut); }
 </style>
@@ -119,12 +127,13 @@
 
   <div class="card">
     <div class="row">
-      <input id="q" type="text" list="recent" autofocus data-i18n-ph="ph_query" onkeydown="qKey(event)">
+      <input id="q" type="text" list="recent" autofocus data-i18n-ph="ph_query" onkeydown="qKey(event)" oninput="liveSearch()">
       <datalist id="recent"></datalist>
       <span class="toggle">
         <button id="mInstant" class="on" onclick="setMode('instant')" data-i18n="mode_instant" data-i18n-title="ttl_instant">全盘语义</button>
         <button id="mName" onclick="setMode('filename')" data-i18n="mode_filename" data-i18n-title="ttl_filename">文件名</button>
         <button id="mSem" onclick="setMode('semantic')" data-i18n="mode_semantic" data-i18n-title="ttl_semantic">深度语义</button>
+        <button id="mImg" onclick="setMode('image')" style="display:none" data-i18n="mode_image" data-i18n-title="ttl_image">图片</button>
       </span>
       <select id="scope" data-i18n-title="ttl_scope"><option value="">全盘</option></select>
       <select id="topk" data-i18n-title="ttl_topk">
@@ -133,8 +142,11 @@
         <option value="50" data-i18n="topk_50">50 条</option>
       </select>
       <button class="primary" onclick="doSearch()" data-i18n="btn_search">搜索</button>
+      <button id="askBtn" style="display:none" onclick="askQuestion()" data-i18n="btn_ask" data-i18n-title="ttl_ask">问一问</button>
     </div>
+    <div class="note" id="fltRow" style="margin-top:8px; display:none; align-items:center; gap:6px; flex-wrap:wrap"></div>
     <div class="note" style="margin-top:6px" data-i18n-html="kbd_hint"></div>
+    <div class="note" style="margin-top:2px" data-i18n-html="flt_hint"></div>
     <div class="note" id="persRow" style="margin-top:6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap">
       <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer">
         <input type="checkbox" id="persChk" onchange="togglePers()">
@@ -145,6 +157,12 @@
       <span style="font-size:12px; color:var(--mut)" data-i18n="pers_hint">越用越懂你 · 全程本地</span>
     </div>
     <div class="err" id="searchErr"></div>
+  </div>
+
+  <div class="card" id="answerCard" style="display:none">
+    <div style="font-weight:500" data-i18n="ans_title">回答</div>
+    <div id="answerText" class="note" style="white-space:pre-wrap; color:var(--fg); font-size:14.5px; margin-top:6px"></div>
+    <div id="answerSrc" class="note"></div>
   </div>
 
   <div id="results"></div>
@@ -173,7 +191,8 @@ const I18N = {
     mode_instant:"全盘语义", ttl_instant:"骑 Windows 内容索引，全盘语义搜，免建索引",
     ttl_instant_off:"此电脑的 Windows 搜索服务未开启，此模式不可用",
     mode_filename:"文件名", ttl_filename:"Everything 文件名秒搜，全盘",
-    mode_semantic:"深度语义", ttl_semantic:"对已添加文件夹的深度语义索引，质量最好",
+    mode_semantic:"深度语义", mode_image:"图片", ttl_image:"用一句话描述找图片/照片（以文搜图扩展包）",
+    err_no_images:"还没有可按描述搜索的图片：装好「以文搜图」扩展包后，重新扫描一次掌控的文件夹。", ttl_semantic:"对已添加文件夹的深度语义索引，质量最好",
     scope_all:"全盘", ttl_scope:"搜索范围（全盘语义 / 文件名模式生效）",
     topk_10:"10 条", topk_20:"20 条", topk_50:"50 条", ttl_topk:"返回结果数量",
     btn_search:"搜索",
@@ -185,17 +204,23 @@ const I18N = {
     nt_rescan_started:"已开始重新扫描（只扫有变化的文件）",
     nt_ws_switch:"Windows 搜索服务未开启，已自动切到「文件名」模式",
     st_building:"正在建立索引… {done}/{total} 个文件{file}",
+    st_catchup:"正在检查上次关闭后的文件变化（只处理有变化的）… {done}/{total}{file}",
     st_ready:"已索引 {files} 个文件 / {chunks} 个文本块 · {model} · {folders}",
     st_folders_n:"掌控 {n} 个文件夹", st_no_folders:"尚未掌控文件夹",
     st_model:"模型 {name}", st_model_loading:"AI 模型加载中（首次约 10-20 秒）…",
     st_disconnected:"无法连接后端",
     bn_cancelled:"已取消建库。", bn_skipped:"已跳过 {n} 个无法读取的文件（其余正常索引）。",
+    bn_cloud:"已跳过 {n} 个仅在云端的文件（没有读取，避免触发 OneDrive 等下载它们）。",
+    cv_head:"读不了的文件：", cv_sep:"；", cv_join:"、", cv_img:"图片 {n} 张（开启「识别图片文字」后可按内容搜到）",
+    cv_pdf_off:"{n} 个 PDF 没有文字层（多为扫描件，开启「识别图片文字」后重新扫描即可）",
+    cv_pdf_on:"{n} 个 PDF 没读出文字（扫描质量太差、加密或损坏）",
+    cv_failed:"{list}（可能加密、损坏或格式异常）", cv_unsup:"{list} 暂不支持",
     st_searching:"搜索中…", st_search_wait:"AI 模型首次加载中（约 10-20 秒），随后自动出结果…",
     em_none:"没有找到结果。",
     em_tip_instant:" 「全盘语义」靠 Windows 索引找候选，纯改写 / 跨语言（零字面重合）可能召不回——想按纯意思搜，请把该文件夹加进「深度语义」（掌控模式）再搜。",
     em_tip_filename:" 试试切到「全盘语义」按内容/意思查找。",
     em_tip_semantic:" 换个说法，或确认这个文件夹已经建好索引。",
-    res_score:"匹配度 {score}", res_modified:"修改于 {mtime}",
+    low_sep:"以下结果与查询的相关度明显较低", res_score:"匹配度 {score}", res_modified:"修改于 {mtime}", res_page:"第 {n} 页", btn_openpage:"打开到第 {n} 页",
     btn_open:"打开文件", btn_reveal:"打开所在文件夹",
     err_bad_folder:"这不是一个有效的文件夹。", err_busy:"正在扫描中，请稍候（或先取消）。",
     err_not_controlled:"不在掌控列表中。", err_no_folders:"还没有掌控任何文件夹。",
@@ -206,6 +231,19 @@ const I18N = {
     err_idx_version:"索引版本已升级，需要重新扫描一次（旧索引已移开）。",
     err_idx_corrupt:"检测到索引文件损坏（可能因断电/强制关机），需要重新扫描。",
     err_idx_load:"索引加载失败，需要重新扫描。",
+    err_not_result:"只能打开搜索结果里的文件（请重新搜索一次）。",
+    flt_hint:'筛选：<code>type:pdf</code> · <code>time:上周</code> · <code>in:文件夹名</code> · <code>after:2024-03</code> —— 只写筛选不写内容，就按时间倒序列出文件',
+    flt_type:"类型 {value}", flt_in:"路径含「{value}」", flt_after:"{value} 之后", flt_before:"{value} 之前",
+    flt_time:"修改于 {start} ~ {end}", ttl_rmflt:"去掉这个筛选",
+    flt_suggest:"只看「{phrase}」修改的文件？（{start} ~ {end}）", flt_unknown:"没看懂的筛选（已当作普通文字）：{u}",
+    fn_windows:"没有找到 Everything：已改用 Windows 搜索索引查文件名（只覆盖已索引的位置，通常是用户文件夹；装上 Everything 即可全盘秒搜）",
+    btn_ask:"问一问", ttl_ask:"让本地模型读相关文件后直接回答（附出处，全程本地）", ans_title:"回答",
+    ans_wait:"正在读相关文件并作答…（本地模型，CPU 上可能要十几秒）", ans_sources:"出处：",
+    err_no_llm:"还没有安装「本地问答」扩展包。", err_no_sources:"深度索引里没有找到相关内容。", err_no_question:"请先输入问题。",
+    btn_similar:"找相似", ttl_similar:"找出内容与它相近的其他文件（基于深度索引）",
+    sim_note:"与「{name}」内容相似的文件", err_no_similar:"深度索引里没有相似的文件（先把相关文件夹加入「深度语义」）。",
+    flt_routed:"只有筛选条件：已用文件名索引列出全盘符合条件的文件（最新的在前）",
+    err_forbidden:"拒绝访问：只接受本机页面的请求。",
     generic_fail:"操作失败", open_fail:"无法打开",
     pers_label:"个性化", ttl_pers:"根据你打开过的文件，在本地学习你的偏好，把更相关的往前排（全程本地、从不上传、也从不训练模型）",
     btn_forget:"忘记我", ttl_forget:"清空本地学到的偏好（打开记录 + 兴趣向量）",
@@ -239,6 +277,8 @@ const I18N = {
     ttl_instant_off:"The Windows Search service is off on this PC, so this mode is unavailable",
     mode_filename:"Filename", ttl_filename:"Instant whole-disk filename search via Everything",
     mode_semantic:"Deep Semantic", ttl_semantic:"Deep semantic index over your added folders — best quality",
+    mode_image:"Images", ttl_image:"Find images and photos by describing them (image-search add-on)",
+    err_no_images:"No images searchable by description yet: install the image-search add-on, then rescan your folders.",
     scope_all:"All drives", ttl_scope:"Search scope (applies to Whole-disk Semantic / Filename)",
     topk_10:"10", topk_20:"20", topk_50:"50", ttl_topk:"Number of results",
     btn_search:"Search",
@@ -250,17 +290,23 @@ const I18N = {
     nt_rescan_started:"Started rescanning (only changed files)",
     nt_ws_switch:"Windows Search service is off — switched to Filename mode automatically",
     st_building:"Indexing… {done}/{total} files{file}",
+    st_catchup:"Checking for changes since the last run (only changed files are processed)… {done}/{total}{file}",
     st_ready:"{files} files / {chunks} text chunks indexed · {model} · {folders}",
     st_folders_n:"{n} folder(s) controlled", st_no_folders:"no folders controlled yet",
     st_model:"model {name}", st_model_loading:"loading AI model (first time ~10-20s)…",
     st_disconnected:"Cannot reach the backend",
     bn_cancelled:"Indexing cancelled. ", bn_skipped:"Skipped {n} unreadable file(s); the rest were indexed.",
+    bn_cloud:"Skipped {n} cloud-only files (not read, so OneDrive etc. won't download them).",
+    cv_head:"Couldn't read: ", cv_sep:"; ", cv_join:", ", cv_img:"{n} images (turn on image OCR to search them by content)",
+    cv_pdf_off:"{n} PDFs without a text layer (mostly scans; turn on image OCR and rescan)",
+    cv_pdf_on:"{n} PDFs with no readable text (poor scan, encrypted or damaged)",
+    cv_failed:"{list} (maybe encrypted, damaged or malformed)", cv_unsup:"{list} not supported yet",
     st_searching:"Searching…", st_search_wait:"Loading the AI model (~10-20s), results will appear automatically…",
     em_none:"No results.",
     em_tip_instant:" Whole-disk Semantic finds candidates via the Windows index, so a pure paraphrase / cross-language query (zero shared words) may miss — add that folder to Deep Semantic (Control mode) to search by meaning only.",
     em_tip_filename:" Try Whole-disk Semantic to search by content / meaning.",
     em_tip_semantic:" Try different wording, or make sure this folder has been indexed.",
-    res_score:"score {score}", res_modified:"modified {mtime}",
+    low_sep:"Results below are clearly less related to your query", res_score:"score {score}", res_modified:"modified {mtime}", res_page:"p. {n}", btn_openpage:"Open at p. {n}",
     btn_open:"Open file", btn_reveal:"Open containing folder",
     err_bad_folder:"That is not a valid folder.", err_busy:"Indexing in progress, please wait (or cancel first).",
     err_not_controlled:"Not in the controlled list.", err_no_folders:"No folders are being controlled yet.",
@@ -271,6 +317,19 @@ const I18N = {
     err_idx_version:"The index format was upgraded — one rescan is needed (the old index was moved aside).",
     err_idx_corrupt:"The index files look damaged (possibly from a power loss / forced shutdown) — a rescan is needed.",
     err_idx_load:"Failed to load the index — a rescan is needed.",
+    err_not_result:"Only files from search results can be opened (search again).",
+    flt_hint:'Filters: <code>type:pdf</code> · <code>time:lastweek</code> · <code>in:folder</code> · <code>after:2024-03</code> — filters with no words list matching files, newest first',
+    flt_type:"type {value}", flt_in:"path contains “{value}”", flt_after:"after {value}", flt_before:"before {value}",
+    flt_time:"modified {start} – {end}", ttl_rmflt:"Remove this filter",
+    flt_suggest:"Only files modified “{phrase}”? ({start} – {end})", flt_unknown:"Filter not understood (kept as words): {u}",
+    fn_windows:"Everything not found: searched file names in the Windows Search index instead (indexed locations only, usually your user folders; install Everything for whole-disk results)",
+    btn_ask:"Ask", ttl_ask:"A local model reads the relevant files and answers, with sources (all on this PC)", ans_title:"Answer",
+    ans_wait:"Reading the relevant files and answering… (local model; may take ten-plus seconds on a CPU)", ans_sources:"Sources: ",
+    err_no_llm:"The local Q&A add-on is not installed.", err_no_sources:"Nothing relevant was found in the deep index.", err_no_question:"Type a question first.",
+    btn_similar:"Find similar", ttl_similar:"Other files whose content is close to this one (deep index)",
+    sim_note:"Files similar to “{name}”", err_no_similar:"No similar files in the deep index (add the relevant folders to Deep Semantic first).",
+    flt_routed:"Filters only: listed matching files from the filename index across the disk (newest first)",
+    err_forbidden:"Refused: only requests from this computer's own page are accepted.",
     generic_fail:"Operation failed", open_fail:"Cannot open",
     pers_label:"Personalize", ttl_pers:"Learns your preferences locally from the files you open and ranks likelier ones higher (all on-device, never uploaded, never trains the model)",
     btn_forget:"Forget me", ttl_forget:"Clear everything learned locally (open history + interest vector)",
@@ -335,11 +394,13 @@ function toggleLang(){
   loadDlc();
   poll();
   if(LAST_RESULTS !== null) renderResults(LAST_RESULTS, LAST_MODE);
+  if(LAST_RESP) renderFilters(LAST_RESP, LAST_MODE);
 }
 function setMode(m){ MODE=m;
   document.getElementById('mInstant').classList.toggle('on', m==='instant');
   document.getElementById('mName').classList.toggle('on', m==='filename');
   document.getElementById('mSem').classList.toggle('on', m==='semantic');
+  document.getElementById('mImg').classList.toggle('on', m==='image');
 }
 function notice(msg, warn){
   const n=document.getElementById('uiNote');
@@ -480,6 +541,10 @@ async function poll(){
     if(s.personalize && !PERS_PENDING){ PERS_ON = !!s.personalize.enabled;
       const pc=document.getElementById('persChk'); if(pc && pc.checked!==PERS_ON) pc.checked=PERS_ON; }
     applyOcrStatus(s.ocr);
+    const askB = document.getElementById('askBtn');
+    if(askB) askB.style.display = (s.qa && s.qa.available)? '' : 'none';
+    const mImg = document.getElementById('mImg');
+    if(mImg) mImg.style.display = (s.images && s.images.available)? '' : 'none';
     if(DLC_PACKS.length){
       renderDlc(s.dlc, s.restart_required);
       const tag = s.dlc? (s.dlc.status+'|'+s.dlc.id) : '';
@@ -509,7 +574,7 @@ async function poll(){
       const p=s.progress, pct=p.total? Math.round(100*p.done/p.total):0;
       fill.style.width=pct+'%';
       document.getElementById('status').textContent=
-        t('st_building', {done:p.done, total:p.total, file:(p.file? '（'+p.file+'）':'')});
+        t(s.catchup? 'st_catchup' : 'st_building', {done:p.done, total:p.total, file:(p.file? '（'+p.file+'）':'')});
       document.getElementById('addBtn').disabled=true;
       document.getElementById('rescanBtn').disabled=true;
     }else{
@@ -522,24 +587,26 @@ async function poll(){
       document.getElementById('status').textContent=
         t('st_ready', {files:s.files, chunks:s.chunks, model, folders});
       const lb=s.last_build;
-      if(lb && (lb.failed>0 || lb.cancelled)){
+      const cov = coverageText(lb);
+      if(lb && (lb.failed>0 || lb.cancelled || lb.cloud_skipped>0 || cov)){
         note.style.display='block';
         note.textContent = (lb.cancelled? t('bn_cancelled') : '')
-          + (lb.failed>0? t('bn_skipped', {n:lb.failed}) : '');
+          + (lb.failed>0? t('bn_skipped', {n:lb.failed}) : '')
+          + (lb.cloud_skipped>0? ' '+t('bn_cloud', {n:lb.cloud_skipped}) : '')
+          + (cov? ' '+cov : '');
       } else { note.style.display='none'; }
     }
   }catch(e){ document.getElementById('status').textContent=t('st_disconnected'); }
 }
 
 function highlight(text, terms){
-  let h = escapeHtml(text);
-  if(terms && terms.length){
-    const esc = terms.filter(x=>x).map(x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
-    if(esc.length){
-      try{ h = h.replace(new RegExp('('+esc.join('|')+')','gi'), '<mark>$1</mark>'); }catch(e){}
-    }
-  }
-  return h;
+  // match on the RAW text, then escape each piece: matching after escaping hit
+  // entity names (a term "amp"/"39" broke "&amp;"/"&#39;" into visible junk)
+  const raw = ''+(text==null?'':text);
+  const esc = (terms||[]).filter(x=>x).map(x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+  if(!esc.length) return escapeHtml(raw);
+  let re; try{ re = new RegExp('('+esc.join('|')+')','gi'); }catch(e){ return escapeHtml(raw); }
+  return raw.split(re).map((p,i)=> i%2 ? '<mark>'+escapeHtml(p)+'</mark>' : escapeHtml(p)).join('');
 }
 function qKey(ev){
   if(ev.key==='Enter'){
@@ -589,6 +656,8 @@ document.getElementById('results').addEventListener('click', ev=>{
   const path = b.closest('.res').dataset.path;
   if(b.dataset.act==='open') openPath(path, false);
   else if(b.dataset.act==='reveal') openPath(path, true);
+  else if(b.dataset.act==='openpage') openPath(path, false, parseInt(b.dataset.page, 10));
+  else if(b.dataset.act==='similar') findSimilar(path);
 });
 function renderResults(items, mode){
   const box=document.getElementById('results');
@@ -599,30 +668,36 @@ function renderResults(items, mode){
     box.innerHTML = '<div class="empty">' + t('em_none') + tip + '</div>';
     return;
   }
+  let sepDone = false;
   box.innerHTML = items.map(it=>{
+    const sep = (it.low && !sepDone)? (sepDone=true, `<div class="lowsep">${escapeHtml(t('low_sep'))}</div>`) : '';
     const score = it.score!=null? `<span class="score">${escapeHtml(t('res_score', {score:it.score}))}</span>`:'';
     const meta = [
       it.personal? `<span class="badge pers" title="${escapeHtml(t('ttl_pers'))}">${escapeHtml(t('badge_personal'))}</span>`:'',
       it.ext? `<span class="badge">${escapeHtml(it.ext)}</span>`:'',
+      it.page? escapeHtml(t('res_page', {n:it.page})):'',
       it.size? `${escapeHtml(it.size)}`:'',
       it.mtime? escapeHtml(t('res_modified', {mtime:it.mtime})):''
     ].filter(Boolean).join('<span style="opacity:.5">·</span>');
-    const snip = it.snippet? `<div class="snip">${highlight(it.snippet, it.terms)}</div>`:'';
-    return `<div class="res" data-path="${escapeHtml(it.path)}">${score}<div class="name">${escapeHtml(it.name)}</div>
+    const snip = it.thumb? `<img class="thumb" loading="lazy" alt="" src="/api/thumb?path=${encodeURIComponent(it.path)}">`
+      : it.snippet? `<div class="snip${it.snipPending?' pending':''}">${highlight(it.snippet, it.terms)}</div>`:'';
+    return `${sep}<div class="res${it.low?' low':''}" data-path="${escapeHtml(it.path)}">${score}<div class="name">${escapeHtml(it.name)}</div>
       <div class="meta">${meta}</div>
       <div class="path">${escapeHtml(it.path)}</div>${snip}
       <div class="acts">
         <button data-act="open">${escapeHtml(t('btn_open'))}</button>
+        ${(it.page && it.ext==='pdf')? `<button data-act="openpage" data-page="${it.page}">${escapeHtml(t('btn_openpage', {n:it.page}))}</button>`:''}
         <button data-act="reveal">${escapeHtml(t('btn_reveal'))}</button>
+        <button data-act="similar" title="${escapeHtml(t('ttl_similar'))}">${escapeHtml(t('btn_similar'))}</button>
       </div></div>`;
   }).join('');
 }
-async function doSearch(){
+async function doSearch(live){
   const q=document.getElementById('q').value.trim();
   const box=document.getElementById('results'); const err=document.getElementById('searchErr');
   err.textContent='';
-  if(!q){ box.innerHTML=''; LAST_RESULTS=null; return; }
-  addRecent(q);
+  if(!q){ box.innerHTML=''; LAST_RESULTS=null; LAST_RESP=null; renderFilters(null); return; }
+  if(!live) addRecent(q);
   LAST_QUERY=q; SEL=-1;
   const mode=MODE;
   const my = ++SEQ;
@@ -633,11 +708,144 @@ async function doSearch(){
   const r = await api('/api/search', {query:q, mode, top_k:k, scope});
   if(my!==SEQ) return;
   err.textContent = r.error? emsg(r) : '';
+  LAST_RESP = r; renderFilters(r, mode);
   LAST_RESULTS = r.results||[]; LAST_MODE = mode;
+  if(r.snip_id) LAST_RESULTS.forEach(it=>{ it.snipPending = true; });
   renderResults(LAST_RESULTS, mode);
+  if(r.snip_id) upgradeSnippets(r.snip_id, my);
 }
-async function openPath(path, reveal){
-  const r = await api('/api/open', {path, reveal});
+let LAST_RESP = null;
+// ---- ask your files: streamed answer with clickable [n] sources ----
+let ASK_SEQ = 0, ANS_SOURCES = [];
+function renderAnswer(text){
+  return escapeHtml(text).replace(/\[(\d{1,2})\]/g, (m, n)=> ANS_SOURCES[n-1]?
+    `<a href="#" class="cite" data-n="${n}">[${n}]</a>` : m);
+}
+function renderSources(cited){
+  const used = ANS_SOURCES.filter(s=> (cited||[]).includes(s.n));
+  if(!used.length) return '';
+  return escapeHtml(t('ans_sources')) + used.map(s=> `<a href="#" class="cite" data-n="${s.n}">[${s.n}] `+
+    `${escapeHtml(s.name)}${s.page? ' · '+escapeHtml(t('res_page', {n:s.page})):''}</a>`).join('');
+}
+async function askQuestion(){
+  const q = document.getElementById('q').value.trim(); if(!q) return;
+  const card = document.getElementById('answerCard'), txt = document.getElementById('answerText'),
+        src = document.getElementById('answerSrc');
+  const my = ++ASK_SEQ;
+  card.style.display = 'block'; txt.textContent = t('ans_wait'); src.innerHTML = ''; ANS_SOURCES = [];
+  let r;
+  try{ r = await fetch('/api/ask', {method:'POST', headers:{'Content-Type':'application/json'},
+                                   body: JSON.stringify({question:q})}); }
+  catch(e){ txt.textContent = t('generic_fail'); return; }
+  if(!r.ok){ let j = {}; try{ j = await r.json(); }catch(e){} if(my===ASK_SEQ) txt.textContent = emsg(j); return; }
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = '', answer = '';
+  for(;;){
+    const {value, done} = await reader.read();
+    if(my!==ASK_SEQ){ try{ reader.cancel(); }catch(e){} return; }
+    if(done) break;
+    buf += dec.decode(value, {stream:true});
+    let i;
+    while((i = buf.indexOf('\n')) >= 0){
+      const line = buf.slice(0, i); buf = buf.slice(i+1);
+      if(!line.trim()) continue;
+      let ev; try{ ev = JSON.parse(line); }catch(e){ continue; }
+      if(ev.type==='sources'){ ANS_SOURCES = ev.sources||[]; answer=''; txt.textContent=''; }
+      else if(ev.type==='token'){ answer += ev.text; txt.innerHTML = renderAnswer(answer); }
+      else if(ev.type==='error'){ txt.textContent = t('generic_fail') + ' ' + ev.error; }
+      else if(ev.type==='done'){ src.innerHTML = renderSources(ev.cited); }
+    }
+  }
+}
+document.getElementById('answerCard').addEventListener('click', ev=>{
+  const a = ev.target.closest('a.cite'); if(!a) return;
+  ev.preventDefault();
+  const s = ANS_SOURCES[parseInt(a.dataset.n, 10) - 1]; if(!s) return;
+  openPath(s.path, false, (s.page && /\.pdf$/i.test(s.name))? s.page : undefined);
+});
+// search as you type: results now arrive in ~10-20 ms (snippets follow), so
+// Deep / Filename modes can run live. Whole-disk mode embeds ~120 Windows
+// Search candidates per query (~1.4 s on a CPU), so it stays on Enter.
+let LIVE_T = null;
+function liveSearch(){
+  clearTimeout(LIVE_T);
+  if(MODE==='instant') return;
+  const q = document.getElementById('q').value.trim();
+  if(q.length < 2 || q === LAST_QUERY) return;
+  LIVE_T = setTimeout(()=>{ if(document.getElementById('q').value.trim()===q) doSearch(true); }, 250);
+}
+// "what could not be read" -- so missing formats are visible, not silent
+const IMG_EXT = ['.png','.jpg','.jpeg','.bmp','.tif','.tiff','.gif','.webp'];
+function coverageText(lb){
+  if(!lb) return '';
+  const parts = [], uns = Object.assign({}, lb.unsupported||{}), fb = Object.assign({}, lb.failed_by||{});
+  let img = 0; IMG_EXT.forEach(e=>{ if(uns[e]){ img += uns[e]; delete uns[e]; } });
+  if(img) parts.push(t('cv_img', {n:img}));
+  if(fb['.pdf']){ parts.push(t(lb.ocr? 'cv_pdf_on':'cv_pdf_off', {n:fb['.pdf']})); delete fb['.pdf']; }
+  const fl = Object.entries(fb).map(([e,n])=>e+' ×'+n).join(t('cv_join'));
+  if(fl) parts.push(t('cv_failed', {list:fl}));
+  const ul = Object.entries(uns).map(([e,n])=>e+' ×'+n).join(t('cv_join'));
+  if(ul) parts.push(t('cv_unsup', {list:ul}));
+  return parts.length? t('cv_head') + parts.join(t('cv_sep')) : '';
+}
+async function findSimilar(path){
+  const box=document.getElementById('results'); const err=document.getElementById('searchErr');
+  const my = ++SEQ; SEL=-1; err.textContent='';
+  box.innerHTML = '<div class="empty">'+t('st_searching')+'</div>';
+  const k = parseInt(document.getElementById('topk').value, 10) || 20;
+  const r = await api('/api/similar', {path, top_k:k});
+  if(my!==SEQ) return;
+  err.textContent = r.error? emsg(r) : '';
+  LAST_RESP = r; renderFilters(r, 'similar');
+  LAST_RESULTS = r.results||[]; LAST_MODE = 'semantic';
+  if(r.snip_id) LAST_RESULTS.forEach(it=>{ it.snipPending = true; });
+  renderResults(LAST_RESULTS, 'semantic');
+  window.scrollTo({top:0, behavior:'smooth'});
+  if(r.snip_id) upgradeSnippets(r.snip_id, my);
+}
+function fltLabel(f){
+  if(f.kind==='time') return t('flt_time', {start:f.start, end:f.end});
+  return t('flt_'+f.kind, {value:f.value});
+}
+function renderFilters(r, mode){
+  const row = document.getElementById('fltRow'); if(!row) return;
+  const parts = (r && r.filters || []).map(f=>
+    `<span class="chip flt" data-token="${escapeHtml(f.token)}"><span>${escapeHtml(fltLabel(f))}</span>`+
+    `<button data-act="rmflt" title="${escapeHtml(t('ttl_rmflt'))}">✕</button></span>`);
+  if(r && r.suggest) parts.push(`<button class="langbtn" style="padding:3px 10px;font-size:12px" data-op="${escapeHtml(r.suggest.op)}">`+
+    `${escapeHtml(t('flt_suggest', {phrase:r.suggest.phrase, start:r.suggest.start, end:r.suggest.end}))}</button>`);
+  if(r && (r.unknown||[]).length) parts.push(`<span class="note warn" style="margin:0">${escapeHtml(t('flt_unknown', {u:r.unknown.join(' ')}))}</span>`);
+  if(r && r.note) parts.push(`<span class="note" style="margin:0">${escapeHtml(t(r.note))}</span>`);
+  if(r && r.similar_to) parts.push(`<span class="chip flt"><span>${escapeHtml(t('sim_note', {name:r.similar_to}))}</span></span>`);
+  if(r && r.mode_used==='filename' && mode!=='filename') parts.push(`<span class="note" style="margin:0">${escapeHtml(t('flt_routed'))}</span>`);
+  row.innerHTML = parts.join(' ');
+  row.style.display = parts.length? 'flex' : 'none';
+}
+document.getElementById('fltRow').addEventListener('click', ev=>{
+  const qi = document.getElementById('q');
+  const rm = ev.target.closest('button[data-act="rmflt"]');
+  if(rm){ const tok = rm.closest('.chip').dataset.token;
+    qi.value = qi.value.split(tok).join(' ').replace(/\s+/g,' ').trim(); doSearch(); return; }
+  const sg = ev.target.closest('button[data-op]');
+  if(sg){ qi.value = (qi.value + ' ' + sg.dataset.op).trim(); doSearch(); }
+});
+// results render immediately with a quick keyword snippet; the semantic
+// "best sentence" (the slow, model-bound part) replaces it when ready
+async function upgradeSnippets(id, my){
+  await new Promise(res=>setTimeout(res, 120));   // still typing? don't spend CPU on it
+  if(my!==SEQ) return;
+  let r; try{ r = await api('/api/snippets', {id}); }catch(e){ r = null; }
+  if(my!==SEQ || !LAST_RESULTS) return;
+  const snips = (r && r.snippets) || {};
+  LAST_RESULTS.forEach(it=>{ if(snips[it.path]) it.snippet = snips[it.path]; it.snipPending = false; });
+  document.querySelectorAll('#results .res').forEach(el=>{
+    const it = LAST_RESULTS.find(x=>x.path===el.dataset.path);
+    const box = el.querySelector('.snip');
+    if(it && box){ box.innerHTML = highlight(it.snippet, it.terms); box.classList.remove('pending'); }
+  });
+}
+async function openPath(path, reveal, page){
+  const r = await api('/api/open', {path, reveal, page});
   if(!r.ok) notice(emsg(r) || t('open_fail'), true);
 }
 function addRecent(q){

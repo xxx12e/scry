@@ -10,9 +10,18 @@ class Config:
     query_prefix: str = "query: "             # multilingual-e5 wants both prefixes
     doc_prefix: str = "passage: "
     device: str = "auto"
-    embed_batch_size: int = 128
+    backend: str = "auto"                 # auto | onnx | torch (see embedder.py)
+    embed_batch_size: int = 128           # chunks gathered across files per embed call
+    encode_batch_size: int = 0            # model batch; 0 = auto (CPU 16, GPU 128)
 
-    alpha: float = 0.7
+    # Fusion weights, tuned on eval/scry_eval_v1.json (scripts/eval.py): dense
+    # 0.8 + language balance lifted MRR 0.746 -> 0.948 (cross-language R@1
+    # 0.13 -> 0.77) without costing exact-phrase or monolingual queries.
+    alpha: float = 0.8
+    lang_balance: float = 1.0         # cross-language bias correction (see search.py)
+    relevance_gap: float = 0.05       # UI dims deep hits whose (balanced) cosine is this far
+                                      # below the best one; on the eval set no relevant hit
+                                      # was further than 0.012, 54% of irrelevant ones were
     fusion_fetch: int = 100
     instant_candidates: int = 120
 
@@ -36,10 +45,17 @@ class Config:
     pers_w_folder: float = 0.2
     pers_w_interest: float = 0.3
     pers_decay: float = 0.9           # older opens decay -> recency-weighted profile
+    pers_top_margin: float = 0.1      # the best match is never displaced by a result
+                                      # less relevant than it by more than this share
+                                      # of the candidates' score range
 
-    supported_ext: tuple = (".txt", ".md", ".pdf", ".docx", ".xlsx", ".pptx",
-                            ".csv", ".html", ".htm", ".rtf")
+    supported_ext: tuple = (".txt", ".md", ".pdf", ".docx", ".xlsx", ".pptx",   # informational:
+                            ".csv", ".html", ".htm", ".rtf", ".ofd", ".doc",     # parser.SUPPORTED
+                            ".xls", ".ppt", ".wps", ".et", ".dps", ".epub",      # is authoritative
+                            ".odt", ".ods", ".odp", ".eml")
     ocr: bool = False                 # opt-in image OCR (Windows built-in engine)
+    index_cloud_files: bool = False   # read cloud-only placeholders (makes OneDrive etc.
+                                      # DOWNLOAD them) -- off: they are skipped
     change_detection: str = "mtime_size"
     max_file_mb: float = 50.0
 

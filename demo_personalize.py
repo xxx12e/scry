@@ -64,7 +64,7 @@ def main():
     eng.personalizer.set_enabled(False)
     off = eng.search_semantic(Q, top_k=12)
     r_off = rank(off, FAV)
-    show(off, "④ 关掉个性化:立刻回到原始排序(个性化只重排,不改检索本身,也不会顶掉更相关的结果):")
+    show(off, "④ 关掉个性化:立刻回到原始排序(个性化只重排,不改检索本身,也绝不顶掉本次查询的最佳匹配):")
 
     fresh = eng.search_semantic("完全不相关的查询 quantum", top_k=5)
     eng.personalizer.set_enabled(True)

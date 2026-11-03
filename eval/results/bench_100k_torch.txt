@@ -1,0 +1,4 @@
+# machine: Model name: Intel(R) Xeon(R) Processor @ 2.10GHz, 4 cores, Linux
+backend=torch  model ready 7.7 s  index 100,000 chunks / 25,000 files  top_k=20
+results (query -> ranked files): median 32 ms, p90 44 ms
+semantic snippets after that:    median 1517 ms

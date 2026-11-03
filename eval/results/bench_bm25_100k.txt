@@ -1,0 +1,2 @@
+100,000 chunks | localsearch.bm25: build 6.8 s, query 0.30 ms, file change 33 us/chunk
+100,000 chunks | rank_bm25 (v1.4):  build 3.7 s (= the refit after every file change), query 121 ms

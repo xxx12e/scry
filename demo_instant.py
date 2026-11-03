@@ -40,7 +40,7 @@ def main():
 
     print("=" * 70)
     print("结论：没有建任何索引，就在全盘内容里语义搜到了东西 —— 这就是'语义版 Everything'。")
-    print("(原理：骑 Windows 自带的全盘内容索引拿候选，再用 bge 语义重排。)")
+    print("(原理：骑 Windows 自带的全盘内容索引拿候选，再用 e5 语义重排。)")
     shutil.rmtree(IDX, ignore_errors=True)
 
 

@@ -8,7 +8,8 @@ from pathlib import Path
 import numpy as np
 import faiss
 
-from .chunker import tokenize
+from .bm25 import BM25Index
+from .chunker import tokenize, TOKENIZER_VERSION
 
 log = logging.getLogger("localsearch.index")
 faiss.omp_set_num_threads(1)
@@ -41,8 +42,9 @@ class DualIndex:
         self.next_id = 0
         self.generation = 0
         self.model_tag = ""       # which embedding model built this index (dim guard)
-        self._bm25 = None
-        self._bm25_cids = []
+        self._bm25 = BM25Index()  # live from the start; load() resets it to None
+        self._bm25_log = None     # mutations made while an out-of-lock build runs
+        self._bm25_build = 0      # id of the build whose result may be installed
         self._tokens = {}
         self._dir_refs = None
 
@@ -73,7 +75,9 @@ class DualIndex:
             self._dir_refs = {}
             for p in self.file_meta:
                 self._dir_ref(p, +1)
-        return os.path.normcase(str(prefix)).rstrip("\\/") in self._dir_refs
+        # normpath (not rstrip): keeps a drive root as "c:\\" / "/", which is
+        # exactly how _ancestors() spells it
+        return os.path.normcase(os.path.normpath(str(prefix))) in self._dir_refs
 
 
     def add_file(self, path, chunks, vecs, fmeta):
@@ -89,9 +93,13 @@ class DualIndex:
         cids = list(range(self.next_id, self.next_id + len(chunks)))
         self.next_id += len(chunks)
         self.dense.add_with_ids(vecs, np.array(cids, dtype=np.int64))
-        for cid, (text, st, en), i in zip(cids, chunks, range(len(chunks))):
+        for cid, ch, i in zip(cids, chunks, range(len(chunks))):
+            text, st, en = ch[0], ch[1], ch[2]
             self.chunk_meta[cid] = dict(path=path, idx=i, text=text, start=st, end=en)
-            self._tokens[cid] = tokenize(text)
+            if len(ch) > 3 and ch[3]:
+                self.chunk_meta[cid]["page"] = ch[3]        # page/slide number
+            toks = self._tokens[cid] = tokenize(text)
+            self._bm25_apply(True, cid, toks)
         self.file_chunks[path] = cids
         self.file_meta[path] = fmeta
         return len(chunks)
@@ -102,9 +110,14 @@ class DualIndex:
             self._dir_ref(path, -1)
         cids = self.file_chunks.pop(path, [])
         self.file_meta.pop(path, None)
+        tracking = self._bm25 is not None or self._bm25_log is not None
         for cid in cids:
-            self.chunk_meta.pop(cid, None)
-            self._tokens.pop(cid, None)
+            meta = self.chunk_meta.pop(cid, None)
+            toks = self._tokens.pop(cid, None)
+            if tracking:
+                if toks is None and meta is not None:
+                    toks = tokenize(meta["text"])
+                self._bm25_apply(False, cid, toks or [])
         return cids
 
     def remove_file(self, path):
@@ -123,54 +136,94 @@ class DualIndex:
         return len(all_cids)
 
 
-    def bm25_inputs(self):
-        """Snapshot (cids, token_lists) for an out-of-lock BM25 build."""
-        cids = list(self.chunk_meta.keys())
-        toks = []
-        for c in cids:
-            t = self._tokens.get(c)
-            if t is None:
-                t = tokenize(self.chunk_meta[c]["text"])
-                self._tokens[c] = t
-            toks.append(t)
-        return cids, toks
+    def _bm25_apply(self, add, cid, toks):
+        if self._bm25 is not None:
+            (self._bm25.add if add else self._bm25.remove)(cid, toks)
+        if self._bm25_log is not None:
+            self._bm25_log.append((add, cid, toks))
 
-    def set_bm25(self, cids, bm25):
-        self._bm25_cids = cids
-        self._bm25 = bm25
+    def bm25_built(self):
+        return self._bm25 is not None
+
+    def bm25_building(self):
+        """An out-of-lock build is in flight (bm25_inputs() taken, not installed)."""
+        return self._bm25 is None and self._bm25_log is not None
+
+    def bm25_inputs(self):
+        """Snapshot (build_id, cids, token_lists, missing) for an out-of-lock
+        BM25 build (call under the lock; O(chunks) pointer copies only).
+        `missing` maps position -> chunk text for chunks with no cached tokens
+        (e.g. after a tokenizer upgrade): build_bm25() tokenizes them OUTSIDE the
+        lock. Mutations from here on are logged and replayed by set_bm25()."""
+        self._bm25_build += 1
+        self._bm25_log = []
+        cids = list(self.chunk_meta.keys())
+        get = self._tokens.get
+        toks = [get(c) for c in cids]
+        missing = {i: self.chunk_meta[cids[i]]["text"]
+                   for i, t in enumerate(toks) if t is None}
+        return self._bm25_build, cids, toks, missing
+
+    def set_bm25(self, build_id, bm25):
+        """Install a finished build (under the lock): replay the mutations logged
+        since its snapshot. A superseded build (another one started, or one was
+        already installed) is dropped. Returns True if installed."""
+        if build_id != self._bm25_build or self._bm25 is not None or self._bm25_log is None:
+            return False
+        for add, cid, toks in self._bm25_log:
+            (bm25.add if add else bm25.remove)(cid, toks)
+        for cid, toks in getattr(bm25, "regenerated", {}).items():
+            if cid in self.chunk_meta and cid not in self._tokens:
+                self._tokens[cid] = toks               # cache re-derived tokens
+        self._bm25, self._bm25_log = bm25, None
+        return True
 
     @staticmethod
-    def build_bm25(toks):
-        """Pure compute -- safe to run outside the engine lock on a snapshot."""
-        if not toks:
-            return None
-        from rank_bm25 import BM25Okapi
-        return BM25Okapi(toks)
+    def build_bm25(cids, toks, missing=None):
+        """Pure compute -- safe to run outside the engine lock on a snapshot.
+        Tokenizes the `missing` chunks first; their tokens ride along on the
+        result (`.regenerated`) so set_bm25() can cache them."""
+        regenerated = {}
+        if missing:
+            toks = list(toks)
+            for i, text in missing.items():
+                toks[i] = regenerated[cids[i]] = tokenize(text)
+        bm25 = BM25Index.build(cids, toks)
+        bm25.regenerated = regenerated
+        return bm25
 
     def rebuild_bm25(self):
-        cids, toks = self.bm25_inputs()
-        self.set_bm25(cids, self.build_bm25(toks))
+        self._bm25 = None
+        bid, cids, toks, missing = self.bm25_inputs()
+        self.set_bm25(bid, self.build_bm25(cids, toks, missing))
 
     def ensure_bm25(self):
-        """Build BM25 on first need (loads no longer build it -> fast startup)."""
-        if self._bm25 is None and self.chunk_meta:
+        """Build BM25 on first need (loads no longer build it -> fast startup).
+        After that it is updated in place on every add/remove -- no refits."""
+        if self._bm25 is None:
             self.rebuild_bm25()
 
 
-    def search_dense(self, qvec, topk):
+    def search_dense(self, qvec, topk, allowed=None):
+        """Exact top-k by inner product; `allowed` (int64 cid array) restricts the
+        search INSIDE FAISS, so a selective filter never starves the result list."""
         if self.dense.ntotal == 0:
             return []
+        if allowed is not None:
+            if not len(allowed):
+                return []
+            params = faiss.SearchParameters(sel=faiss.IDSelectorBatch(allowed))
+            D, I = self.dense.search(qvec, min(topk, len(allowed)), params=params)
+            return [(int(c), float(s)) for c, s in zip(I[0], D[0]) if c >= 0]
         D, I = self.dense.search(qvec, min(topk, self.dense.ntotal))
         return [(int(c), float(s)) for c, s in zip(I[0], D[0]) if c >= 0]
 
-    def search_bm25(self, qtokens, topk):
-        if self._bm25 is None or not self._bm25_cids:
+    def search_bm25(self, qtokens, topk, allowed=None):
+        """Best chunks containing a query term (non-matching chunks are not
+        returned; search.retrieve() normalizes against a zero floor)."""
+        if self._bm25 is None:
             return []
-        scores = self._bm25.get_scores(qtokens)
-        n = min(topk, len(scores))
-        top = np.argpartition(-scores, n - 1)[:n]
-        top = top[np.argsort(-scores[top])]
-        return [(self._bm25_cids[i], float(scores[i])) for i in top]
+        return self._bm25.top(qtokens, topk, allowed)
 
 
     def snapshot(self):
@@ -180,7 +233,8 @@ class DualIndex:
         store = dict(version=INDEX_VERSION, generation=self.generation, dim=self.dim,
                      chunk_meta=dict(self.chunk_meta), file_chunks=dict(self.file_chunks),
                      file_meta=dict(self.file_meta), next_id=self.next_id,
-                     tokens=dict(self._tokens), model_tag=self.model_tag)
+                     tokens=dict(self._tokens), tok_ver=TOKENIZER_VERSION,
+                     model_tag=self.model_tag)
         return self.generation, dense_arr, store
 
     @staticmethod
@@ -232,7 +286,11 @@ class DualIndex:
         obj.next_id = store["next_id"]
         obj.generation = store["generation"]
         obj.model_tag = store.get("model_tag", "")
-        obj._tokens = store.get("tokens") or {}
+        obj._bm25 = None          # postings are not persisted: built after load
+        # tokens from an older tokenizer are dropped and re-derived from the chunk
+        # text by bm25_inputs() (cheap; embeddings are untouched)
+        obj._tokens = ((store.get("tokens") or {})
+                       if store.get("tok_ver", 1) == TOKENIZER_VERSION else {})
 
 
         if obj.dense.ntotal != len(obj.chunk_meta):

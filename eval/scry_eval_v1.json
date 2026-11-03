@@ -1,0 +1,860 @@
+{
+ "version": 1,
+ "note": "Synthetic, hand-written bilingual eval: 30 topics, each target with a same-language confuser; per target a paraphrase, a cross-language and a keyword query. Authored, so biased -- use it to COMPARE configurations, not as an absolute quality claim. 'exact' queries quote literal numbers/phrases (where lexical matching matters).",
+ "docs": {
+  "travel_reimb": {
+   "lang": "zh",
+   "text": "出差报销规定：住宿标准一线城市每晚不超过600元，其他城市450元。高铁二等座和经济舱机票可全额报销，需在返程后十个工作日内提交行程单和发票。"
+  },
+  "travel_reimb__confuser": {
+   "lang": "zh",
+   "text": "办公用品申领流程：员工在内网填写申领单，部门经理审批后由行政部统一采购，每月五号集中发放。"
+  },
+  "laptop_warranty": {
+   "lang": "en",
+   "text": "Laptop warranty policy: company notebooks are covered for three years including accidental damage. Report a broken screen or keyboard to IT within 48 hours and a loaner device is issued the same day."
+  },
+  "laptop_warranty__confuser": {
+   "lang": "en",
+   "text": "Mobile phone allowance: employees in sales roles receive a monthly stipend of 50 dollars towards their personal phone plan, paid with the regular salary."
+  },
+  "reservoir": {
+   "lang": "zh",
+   "text": "水文报告：今年八月持续干旱，城北水库水位跌至建库以来最低点，蓄水量不足设计库容的两成，自来水公司已启动分时段供水。"
+  },
+  "reservoir__confuser": {
+   "lang": "zh",
+   "text": "防汛预案：每年六月至九月为主汛期，河道管理处二十四小时值班，暴雨红色预警时沿河低洼地区居民需在两小时内转移。"
+  },
+  "onboarding": {
+   "lang": "en",
+   "text": "New hire onboarding checklist: on day one collect your badge from reception, set up two-factor authentication, and complete the mandatory security awareness course before you are given access to customer data."
+  },
+  "onboarding__confuser": {
+   "lang": "en",
+   "text": "Annual performance review: managers schedule a one-hour conversation in December covering goals achieved, feedback from peers, and the salary adjustment for next year."
+  },
+  "contract_renewal": {
+   "lang": "zh",
+   "text": "供应商合同续签：现有服务器维保合同将于明年三月到期，法务部要求提前九十天启动续签谈判，新合同需增加数据泄露的违约赔偿条款。"
+  },
+  "contract_renewal__confuser": {
+   "lang": "zh",
+   "text": "采购招标公告：本次招标采购五十台办公台式机，投标截止日期为下月十五日，开标地点在公司三楼会议室。"
+  },
+  "api_latency": {
+   "lang": "en",
+   "text": "Postmortem: the checkout API slowed down because a missing database index forced full table scans. After adding a composite index on order id and status, p99 latency dropped from 2.3 seconds to 140 milliseconds."
+  },
+  "api_latency__confuser": {
+   "lang": "en",
+   "text": "Release notes 4.2: the mobile app gains dark mode, a redesigned settings page, and support for paying with gift cards at checkout."
+  },
+  "maternity": {
+   "lang": "zh",
+   "text": "产假政策：女职工生育享受一百五十八天产假，难产增加十五天，多胞胎每多一个婴儿增加十五天；配偶享受十五天陪产假，期间工资照常发放。"
+  },
+  "maternity__confuser": {
+   "lang": "zh",
+   "text": "年休假规定：工作满一年不满十年的员工每年享有五天带薪年假，满十年不满二十年的享有十天，未休年假可顺延至次年第一季度。"
+  },
+  "phishing": {
+   "lang": "en",
+   "text": "Security alert: attackers are sending emails that imitate our payroll provider and ask staff to confirm bank details on a fake login page. Never enter your password from an email link; report the message with the phish button."
+  },
+  "phishing__confuser": {
+   "lang": "en",
+   "text": "Password policy update: passwords must be at least fourteen characters and are no longer forced to expire every ninety days, following current NIST guidance."
+  },
+  "diabetes_diet": {
+   "lang": "zh",
+   "text": "糖尿病饮食建议：控制总热量，主食以粗粮为主，少吃精米白面，每餐蔬菜不少于一斤，水果选择升糖指数低的苹果和柚子，并在两餐之间少量进食。"
+  },
+  "diabetes_diet__confuser": {
+   "lang": "zh",
+   "text": "高血压用药须知：降压药需每天固定时间服用，不可擅自停药，服药期间避免大量饮酒，定期测量血压并记录。"
+  },
+  "garden_tomato": {
+   "lang": "en",
+   "text": "Growing tomatoes on a balcony: choose a deep pot, give the plants at least six hours of direct sun, water at the base in the morning, and pinch off side shoots so energy goes into the fruit."
+  },
+  "garden_tomato__confuser": {
+   "lang": "en",
+   "text": "Caring for indoor orchids: water once a week by soaking the roots for ten minutes, keep them in bright indirect light, and repot every two years in fresh bark."
+  },
+  "tax_refund": {
+   "lang": "zh",
+   "text": "个人所得税年度汇算：每年三月一日至六月三十日办理，子女教育、赡养老人、住房贷款利息等专项附加扣除未在预扣时享受的，可在汇算时申报退税。"
+  },
+  "tax_refund__confuser": {
+   "lang": "zh",
+   "text": "社保缴费基数调整：每年七月按照上一年度职工月平均工资重新核定缴费基数，单位和个人按比例共同缴纳。"
+  },
+  "kubernetes_outage": {
+   "lang": "en",
+   "text": "Incident report: a misconfigured autoscaler removed all worker nodes in the production Kubernetes cluster during a traffic spike, causing a 37 minute outage of the booking service."
+  },
+  "kubernetes_outage__confuser": {
+   "lang": "en",
+   "text": "Capacity planning for the holiday season: we expect three times the usual traffic and will pre-provision database replicas two weeks in advance."
+  },
+  "wedding_plan": {
+   "lang": "zh",
+   "text": "婚礼筹备清单：提前一年预订酒店宴会厅，半年前确定摄影师和婚纱，三个月前发出请柬，婚礼前一周与主持人彩排流程。"
+  },
+  "wedding_plan__confuser": {
+   "lang": "zh",
+   "text": "生日派对布置：准备气球、彩带和蛋糕，提前确认来宾人数，安排一个小游戏环节活跃气氛。"
+  },
+  "car_insurance": {
+   "lang": "en",
+   "text": "Car insurance claim steps: photograph the damage and the other vehicle's plate, exchange insurance details, call the hotline within 24 hours, and get a repair estimate from an approved garage."
+  },
+  "car_insurance__confuser": {
+   "lang": "en",
+   "text": "Home insurance renewal: the premium rises by eight percent this year; adding a monitored burglar alarm lowers it by five percent."
+  },
+  "thesis_format": {
+   "lang": "zh",
+   "text": "毕业论文格式要求：正文使用宋体小四号字，行距1.5倍，参考文献按GB/T 7714著录，查重率不得超过百分之十五，答辩前两周提交终稿。"
+  },
+  "thesis_format__confuser": {
+   "lang": "zh",
+   "text": "课程选修指南：每学期选修课不超过三门，选课系统在开学前一周开放，退选需在第二周结束前完成。"
+  },
+  "solar_panels": {
+   "lang": "en",
+   "text": "Rooftop solar proposal: twenty panels producing about 8,000 kilowatt hours per year would cover roughly seventy percent of the building's electricity and pay back the investment in about seven years."
+  },
+  "solar_panels__confuser": {
+   "lang": "en",
+   "text": "Electric vehicle charging stations: four chargers will be installed in the staff car park; employees pay a flat rate per session through the parking app."
+  },
+  "meeting_minutes": {
+   "lang": "zh",
+   "text": "项目周会纪要：前端改版延期一周，原因是设计稿第三次修改；后端接口已联调完成；下周二前测试组提交回归测试报告。"
+  },
+  "meeting_minutes__confuser": {
+   "lang": "zh",
+   "text": "团建活动通知：本月二十号组织去郊外徒步，自愿报名，公司承担交通和午餐费用。"
+  },
+  "gdpr_request": {
+   "lang": "en",
+   "text": "Handling a data deletion request: verify the requester's identity, locate their records in the CRM and backups, delete or anonymize them within thirty days, and log the request for the privacy audit."
+  },
+  "gdpr_request__confuser": {
+   "lang": "en",
+   "text": "Cookie banner update: the website now asks for consent before loading analytics scripts and remembers the choice for six months."
+  },
+  "rent_contract": {
+   "lang": "zh",
+   "text": "租房合同要点：押一付三，租期两年，租期内房东不得涨租；租客提前退租需提前一个月书面通知，否则押金不予退还。"
+  },
+  "rent_contract__confuser": {
+   "lang": "zh",
+   "text": "物业费通知：小区物业费自明年起调整为每平方米每月二点五元，可按季度或年度缴纳。"
+  },
+  "marathon": {
+   "lang": "en",
+   "text": "Marathon training plan: build up to sixty kilometres per week over sixteen weeks, include one long run every Sunday, and taper during the last three weeks before race day."
+  },
+  "marathon__confuser": {
+   "lang": "en",
+   "text": "Swimming lessons for beginners: the pool offers ten evening sessions focused on breathing technique and freestyle basics."
+  },
+  "cpu_fan": {
+   "lang": "zh",
+   "text": "电脑故障排查：笔记本风扇噪音大、机身发烫，多半是散热口积灰，可用压缩空气清理，必要时更换导热硅脂，问题仍在则送修。"
+  },
+  "cpu_fan__confuser": {
+   "lang": "zh",
+   "text": "打印机卡纸处理：关闭电源，打开后盖，顺着进纸方向慢慢抽出纸张，检查是否有碎纸残留后再开机。"
+  },
+  "customer_churn": {
+   "lang": "en",
+   "text": "Churn analysis: customers who did not log in during their first week were four times more likely to cancel within three months, so the onboarding emails will be redesigned around a first-week activation goal."
+  },
+  "customer_churn__confuser": {
+   "lang": "en",
+   "text": "Pricing experiment: a ten percent discount on annual plans increased conversions slightly but reduced revenue per customer."
+  },
+  "visa_japan": {
+   "lang": "zh",
+   "text": "日本旅游签证办理：需提供护照原件、近六个月银行流水、在职证明和行程单，经送签旅行社递交，一般七个工作日出签，单次签证停留十五天。"
+  },
+  "visa_japan__confuser": {
+   "lang": "zh",
+   "text": "国内机票退改规则：起飞前七天以上退票收取百分之五手续费，起飞前两小时内退票收取百分之五十。"
+  },
+  "code_review": {
+   "lang": "en",
+   "text": "Code review guidelines: keep pull requests under four hundred lines, explain the why in the description, require one approval from a code owner, and never merge with failing tests."
+  },
+  "code_review__confuser": {
+   "lang": "en",
+   "text": "Branch naming convention: use feature slash ticket number slash short description, all lowercase with hyphens."
+  },
+  "kindergarten": {
+   "lang": "zh",
+   "text": "幼儿园入园须知：入园前需完成体检和疫苗接种证明查验，第一周家长可陪同半天，孩子需自带换洗衣物和水杯。"
+  },
+  "kindergarten__confuser": {
+   "lang": "zh",
+   "text": "小学课后托管：放学后在校内托管至下午六点，提供作业辅导，每学期收费一千二百元。"
+  },
+  "wine_storage": {
+   "lang": "en",
+   "text": "Storing wine at home: keep bottles on their side in a dark place at a steady twelve to fourteen degrees Celsius, away from vibration, so the cork stays moist and the wine ages slowly."
+  },
+  "wine_storage__confuser": {
+   "lang": "en",
+   "text": "Coffee brewing guide: use a medium grind, water just off the boil, and a ratio of one gram of coffee to sixteen grams of water."
+  },
+  "earthquake_drill": {
+   "lang": "zh",
+   "text": "地震应急演练：警报响起后立即躲到桌下护住头部，震动停止后沿疏散路线有序撤离到操场，不得乘坐电梯，各班清点人数后上报。"
+  },
+  "earthquake_drill__confuser": {
+   "lang": "zh",
+   "text": "消防器材检查：每月检查一次灭火器压力表指针是否在绿色区域，过期灭火器需及时送检更换。"
+  },
+  "invoice_dispute": {
+   "lang": "en",
+   "text": "Disputed invoice: the supplier billed us twice for the March cloud hosting. Finance has put payment on hold and asked them for a corrected credit note before the end of the quarter."
+  },
+  "invoice_dispute__confuser": {
+   "lang": "en",
+   "text": "Expense card limits: corporate cards have a monthly limit of 5,000 dollars; anything above that needs pre-approval from the department head."
+  },
+  "pet_vaccine": {
+   "lang": "zh",
+   "text": "宠物疫苗接种：幼犬出生后六至八周首次接种，之后每隔三周加强一次，共三针，狂犬疫苗三月龄后接种，此后每年一次。"
+  },
+  "pet_vaccine__confuser": {
+   "lang": "zh",
+   "text": "猫咪饮食注意：成年猫每天喂食两次，避免喂食洋葱、巧克力和葡萄，保证充足饮水。"
+  },
+  "remote_work": {
+   "lang": "en",
+   "text": "Remote work policy: staff may work from home up to three days a week, must be reachable on chat between ten and four, and need manager approval to work from another country for more than two weeks."
+  },
+  "remote_work__confuser": {
+   "lang": "en",
+   "text": "Office relocation: the team moves to the new building on the fifth floor next month; desks are assigned by department."
+  }
+ },
+ "queries": [
+  {
+   "q": "出去办事住酒店最多能报多少钱",
+   "kind": "para",
+   "rel": "travel_reimb",
+   "qlang": "zh"
+  },
+  {
+   "q": "hotel cost limit when travelling for work",
+   "kind": "cross",
+   "rel": "travel_reimb",
+   "qlang": "en"
+  },
+  {
+   "q": "差旅 住宿 报销 发票",
+   "kind": "kw",
+   "rel": "travel_reimb",
+   "qlang": "zh"
+  },
+  {
+   "q": "my work computer's display cracked, what do I do",
+   "kind": "para",
+   "rel": "laptop_warranty",
+   "qlang": "en"
+  },
+  {
+   "q": "公司笔记本屏幕摔坏了怎么报修",
+   "kind": "cross",
+   "rel": "laptop_warranty",
+   "qlang": "zh"
+  },
+  {
+   "q": "laptop warranty accidental damage",
+   "kind": "kw",
+   "rel": "laptop_warranty",
+   "qlang": "en"
+  },
+  {
+   "q": "今年夏天缺水最严重的时候水库还剩多少",
+   "kind": "para",
+   "rel": "reservoir",
+   "qlang": "zh"
+  },
+  {
+   "q": "when did the reservoir hit a record low",
+   "kind": "cross",
+   "rel": "reservoir",
+   "qlang": "en"
+  },
+  {
+   "q": "水库 水位 干旱",
+   "kind": "kw",
+   "rel": "reservoir",
+   "qlang": "zh"
+  },
+  {
+   "q": "what should someone do on their first day at the company",
+   "kind": "para",
+   "rel": "onboarding",
+   "qlang": "en"
+  },
+  {
+   "q": "新员工第一天要完成哪些安全培训",
+   "kind": "cross",
+   "rel": "onboarding",
+   "qlang": "zh"
+  },
+  {
+   "q": "onboarding badge two-factor",
+   "kind": "kw",
+   "rel": "onboarding",
+   "qlang": "en"
+  },
+  {
+   "q": "维护服务的协议快到期了要提前多久谈",
+   "kind": "para",
+   "rel": "contract_renewal",
+   "qlang": "zh"
+  },
+  {
+   "q": "when to start renegotiating the server maintenance agreement",
+   "kind": "cross",
+   "rel": "contract_renewal",
+   "qlang": "en"
+  },
+  {
+   "q": "合同 续签 违约赔偿",
+   "kind": "kw",
+   "rel": "contract_renewal",
+   "qlang": "zh"
+  },
+  {
+   "q": "why was paying for orders so slow and how was it fixed",
+   "kind": "para",
+   "rel": "api_latency",
+   "qlang": "en"
+  },
+  {
+   "q": "结账接口变慢的原因和解决办法",
+   "kind": "cross",
+   "rel": "api_latency",
+   "qlang": "zh"
+  },
+  {
+   "q": "checkout latency database index",
+   "kind": "kw",
+   "rel": "api_latency",
+   "qlang": "en"
+  },
+  {
+   "q": "生孩子可以休多久的假",
+   "kind": "para",
+   "rel": "maternity",
+   "qlang": "zh"
+  },
+  {
+   "q": "how many days of leave after giving birth",
+   "kind": "cross",
+   "rel": "maternity",
+   "qlang": "en"
+  },
+  {
+   "q": "产假 陪产假 天数",
+   "kind": "kw",
+   "rel": "maternity",
+   "qlang": "zh"
+  },
+  {
+   "q": "someone pretending to be the salary company is asking for my account number",
+   "kind": "para",
+   "rel": "phishing",
+   "qlang": "en"
+  },
+  {
+   "q": "冒充工资发放机构的诈骗邮件",
+   "kind": "cross",
+   "rel": "phishing",
+   "qlang": "zh"
+  },
+  {
+   "q": "phishing payroll fake login",
+   "kind": "kw",
+   "rel": "phishing",
+   "qlang": "en"
+  },
+  {
+   "q": "血糖高的人平时该怎么吃饭",
+   "kind": "para",
+   "rel": "diabetes_diet",
+   "qlang": "zh"
+  },
+  {
+   "q": "what should a diabetic eat",
+   "kind": "cross",
+   "rel": "diabetes_diet",
+   "qlang": "en"
+  },
+  {
+   "q": "糖尿病 饮食 粗粮",
+   "kind": "kw",
+   "rel": "diabetes_diet",
+   "qlang": "zh"
+  },
+  {
+   "q": "how to grow tomatoes in a container outside my flat",
+   "kind": "para",
+   "rel": "garden_tomato",
+   "qlang": "en"
+  },
+  {
+   "q": "阳台种番茄的方法",
+   "kind": "cross",
+   "rel": "garden_tomato",
+   "qlang": "zh"
+  },
+  {
+   "q": "tomatoes balcony pot sun",
+   "kind": "kw",
+   "rel": "garden_tomato",
+   "qlang": "en"
+  },
+  {
+   "q": "个税多交了怎么申请退回来",
+   "kind": "para",
+   "rel": "tax_refund",
+   "qlang": "zh"
+  },
+  {
+   "q": "how to claim an income tax refund for child education deductions",
+   "kind": "cross",
+   "rel": "tax_refund",
+   "qlang": "en"
+  },
+  {
+   "q": "个税 汇算 退税 专项附加扣除",
+   "kind": "kw",
+   "rel": "tax_refund",
+   "qlang": "zh"
+  },
+  {
+   "q": "why did the reservation system go down for over half an hour",
+   "kind": "para",
+   "rel": "kubernetes_outage",
+   "qlang": "en"
+  },
+  {
+   "q": "生产集群自动扩缩容配置错误导致服务中断",
+   "kind": "cross",
+   "rel": "kubernetes_outage",
+   "qlang": "zh"
+  },
+  {
+   "q": "kubernetes autoscaler outage",
+   "kind": "kw",
+   "rel": "kubernetes_outage",
+   "qlang": "en"
+  },
+  {
+   "q": "结婚之前要提前多久订酒席",
+   "kind": "para",
+   "rel": "wedding_plan",
+   "qlang": "zh"
+  },
+  {
+   "q": "wedding preparation timeline checklist",
+   "kind": "cross",
+   "rel": "wedding_plan",
+   "qlang": "en"
+  },
+  {
+   "q": "婚礼 筹备 请柬",
+   "kind": "kw",
+   "rel": "wedding_plan",
+   "qlang": "zh"
+  },
+  {
+   "q": "someone hit my car, what is the claims process",
+   "kind": "para",
+   "rel": "car_insurance",
+   "qlang": "en"
+  },
+  {
+   "q": "车被撞了怎么向保险公司理赔",
+   "kind": "cross",
+   "rel": "car_insurance",
+   "qlang": "zh"
+  },
+  {
+   "q": "car insurance claim garage",
+   "kind": "kw",
+   "rel": "car_insurance",
+   "qlang": "en"
+  },
+  {
+   "q": "写毕业论文字体字号有什么规定",
+   "kind": "para",
+   "rel": "thesis_format",
+   "qlang": "zh"
+  },
+  {
+   "q": "plagiarism check threshold for the graduation thesis",
+   "kind": "cross",
+   "rel": "thesis_format",
+   "qlang": "en"
+  },
+  {
+   "q": "论文 格式 查重",
+   "kind": "kw",
+   "rel": "thesis_format",
+   "qlang": "zh"
+  },
+  {
+   "q": "how long until putting panels on the roof pays for itself",
+   "kind": "para",
+   "rel": "solar_panels",
+   "qlang": "en"
+  },
+  {
+   "q": "屋顶光伏多少年能回本",
+   "kind": "cross",
+   "rel": "solar_panels",
+   "qlang": "zh"
+  },
+  {
+   "q": "solar panels payback",
+   "kind": "kw",
+   "rel": "solar_panels",
+   "qlang": "en"
+  },
+  {
+   "q": "前端改版为什么推迟了",
+   "kind": "para",
+   "rel": "meeting_minutes",
+   "qlang": "zh"
+  },
+  {
+   "q": "why was the frontend redesign delayed",
+   "kind": "cross",
+   "rel": "meeting_minutes",
+   "qlang": "en"
+  },
+  {
+   "q": "周会 纪要 延期",
+   "kind": "kw",
+   "rel": "meeting_minutes",
+   "qlang": "zh"
+  },
+  {
+   "q": "a customer wants all their personal information erased",
+   "kind": "para",
+   "rel": "gdpr_request",
+   "qlang": "en"
+  },
+  {
+   "q": "用户要求删除个人数据怎么处理",
+   "kind": "cross",
+   "rel": "gdpr_request",
+   "qlang": "zh"
+  },
+  {
+   "q": "data deletion request anonymize",
+   "kind": "kw",
+   "rel": "gdpr_request",
+   "qlang": "en"
+  },
+  {
+   "q": "租的房子不想住了提前搬走押金能退吗",
+   "kind": "para",
+   "rel": "rent_contract",
+   "qlang": "zh"
+  },
+  {
+   "q": "can I get my deposit back if I leave the apartment early",
+   "kind": "cross",
+   "rel": "rent_contract",
+   "qlang": "en"
+  },
+  {
+   "q": "租房 押金 退租",
+   "kind": "kw",
+   "rel": "rent_contract",
+   "qlang": "zh"
+  },
+  {
+   "q": "how should I prepare for running a full 42 km race",
+   "kind": "para",
+   "rel": "marathon",
+   "qlang": "en"
+  },
+  {
+   "q": "马拉松训练计划每周跑多少公里",
+   "kind": "cross",
+   "rel": "marathon",
+   "qlang": "zh"
+  },
+  {
+   "q": "marathon training long run taper",
+   "kind": "kw",
+   "rel": "marathon",
+   "qlang": "en"
+  },
+  {
+   "q": "笔记本电脑很烫而且嗡嗡响怎么办",
+   "kind": "para",
+   "rel": "cpu_fan",
+   "qlang": "zh"
+  },
+  {
+   "q": "laptop is hot and the fan is loud",
+   "kind": "cross",
+   "rel": "cpu_fan",
+   "qlang": "en"
+  },
+  {
+   "q": "风扇 散热 硅脂",
+   "kind": "kw",
+   "rel": "cpu_fan",
+   "qlang": "zh"
+  },
+  {
+   "q": "users who don't sign in early on tend to cancel",
+   "kind": "para",
+   "rel": "customer_churn",
+   "qlang": "en"
+  },
+  {
+   "q": "首周未登录的用户更容易流失",
+   "kind": "cross",
+   "rel": "customer_churn",
+   "qlang": "zh"
+  },
+  {
+   "q": "churn first week activation",
+   "kind": "kw",
+   "rel": "customer_churn",
+   "qlang": "en"
+  },
+  {
+   "q": "去日本玩要准备哪些材料",
+   "kind": "para",
+   "rel": "visa_japan",
+   "qlang": "zh"
+  },
+  {
+   "q": "documents needed for a Japanese tourist visa",
+   "kind": "cross",
+   "rel": "visa_japan",
+   "qlang": "en"
+  },
+  {
+   "q": "日本 签证 银行流水",
+   "kind": "kw",
+   "rel": "visa_japan",
+   "qlang": "zh"
+  },
+  {
+   "q": "what are the rules before a change can be merged",
+   "kind": "para",
+   "rel": "code_review",
+   "qlang": "en"
+  },
+  {
+   "q": "代码评审合并前的要求",
+   "kind": "cross",
+   "rel": "code_review",
+   "qlang": "zh"
+  },
+  {
+   "q": "pull request review approval",
+   "kind": "kw",
+   "rel": "code_review",
+   "qlang": "en"
+  },
+  {
+   "q": "孩子第一次上幼儿园家长要准备什么",
+   "kind": "para",
+   "rel": "kindergarten",
+   "qlang": "zh"
+  },
+  {
+   "q": "what to prepare before a child starts kindergarten",
+   "kind": "cross",
+   "rel": "kindergarten",
+   "qlang": "en"
+  },
+  {
+   "q": "入园 体检 疫苗",
+   "kind": "kw",
+   "rel": "kindergarten",
+   "qlang": "zh"
+  },
+  {
+   "q": "what temperature should bottles of red be kept at",
+   "kind": "para",
+   "rel": "wine_storage",
+   "qlang": "en"
+  },
+  {
+   "q": "葡萄酒在家怎么保存",
+   "kind": "cross",
+   "rel": "wine_storage",
+   "qlang": "zh"
+  },
+  {
+   "q": "wine storage temperature cork",
+   "kind": "kw",
+   "rel": "wine_storage",
+   "qlang": "en"
+  },
+  {
+   "q": "地面摇晃的时候学生应该怎么做",
+   "kind": "para",
+   "rel": "earthquake_drill",
+   "qlang": "zh"
+  },
+  {
+   "q": "what to do during an earthquake drill at school",
+   "kind": "cross",
+   "rel": "earthquake_drill",
+   "qlang": "en"
+  },
+  {
+   "q": "地震 演练 疏散",
+   "kind": "kw",
+   "rel": "earthquake_drill",
+   "qlang": "zh"
+  },
+  {
+   "q": "the vendor charged us two times for the same month",
+   "kind": "para",
+   "rel": "invoice_dispute",
+   "qlang": "en"
+  },
+  {
+   "q": "供应商重复开票我们暂停付款",
+   "kind": "cross",
+   "rel": "invoice_dispute",
+   "qlang": "zh"
+  },
+  {
+   "q": "invoice billed twice credit note",
+   "kind": "kw",
+   "rel": "invoice_dispute",
+   "qlang": "en"
+  },
+  {
+   "q": "小狗要打几次预防针",
+   "kind": "para",
+   "rel": "pet_vaccine",
+   "qlang": "zh"
+  },
+  {
+   "q": "puppy vaccination schedule",
+   "kind": "cross",
+   "rel": "pet_vaccine",
+   "qlang": "en"
+  },
+  {
+   "q": "幼犬 疫苗 狂犬",
+   "kind": "kw",
+   "rel": "pet_vaccine",
+   "qlang": "zh"
+  },
+  {
+   "q": "how many days am I allowed to work from my house",
+   "kind": "para",
+   "rel": "remote_work",
+   "qlang": "en"
+  },
+  {
+   "q": "每周可以居家办公几天",
+   "kind": "cross",
+   "rel": "remote_work",
+   "qlang": "zh"
+  },
+  {
+   "q": "remote work policy days",
+   "kind": "kw",
+   "rel": "remote_work",
+   "qlang": "en"
+  },
+  {
+   "q": "600元 450元",
+   "kind": "exact",
+   "rel": "travel_reimb",
+   "qlang": "zh"
+  },
+  {
+   "q": "2.3 seconds 140 milliseconds",
+   "kind": "exact",
+   "rel": "api_latency",
+   "qlang": "en"
+  },
+  {
+   "q": "GB/T 7714",
+   "kind": "exact",
+   "rel": "thesis_format",
+   "qlang": "en"
+  },
+  {
+   "q": "一百五十八天",
+   "kind": "exact",
+   "rel": "maternity",
+   "qlang": "zh"
+  },
+  {
+   "q": "8,000 kilowatt hours",
+   "kind": "exact",
+   "rel": "solar_panels",
+   "qlang": "en"
+  },
+  {
+   "q": "37 minute outage",
+   "kind": "exact",
+   "rel": "kubernetes_outage",
+   "qlang": "en"
+  },
+  {
+   "q": "credit note March cloud hosting",
+   "kind": "exact",
+   "rel": "invoice_dispute",
+   "qlang": "en"
+  },
+  {
+   "q": "七个工作日出签",
+   "kind": "exact",
+   "rel": "visa_japan",
+   "qlang": "zh"
+  },
+  {
+   "q": "four hundred lines",
+   "kind": "exact",
+   "rel": "code_review",
+   "qlang": "en"
+  },
+  {
+   "q": "押一付三",
+   "kind": "exact",
+   "rel": "rent_contract",
+   "qlang": "zh"
+  },
+  {
+   "q": "sixty kilometres",
+   "kind": "exact",
+   "rel": "marathon",
+   "qlang": "en"
+  },
+  {
+   "q": "不得乘坐电梯",
+   "kind": "exact",
+   "rel": "earthquake_drill",
+   "qlang": "zh"
+  }
+ ]
+}

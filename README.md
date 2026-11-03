@@ -4,7 +4,7 @@
 
 # 🔮 Scry
 
-### Everything finds filenames. **Scry finds meaning.**
+### Find your files by **meaning**, with Scry.
 
 Instant, whole‑disk **semantic** file search that runs **100% offline**.
 Type what you *mean* — not the exact words — and find the file. Your files never leave your machine.
@@ -23,6 +23,27 @@ Type what you *mean* — not the exact words — and find the file. Your files n
 
 ---
 
+## Benchmarks
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/eval-en-dark.svg">
+  <img src="docs/img/eval-en-light.svg" width="820" alt="Scry Bilingual Retrieval Eval, v1.4 vs now: cross-language #1 from 13% to 77%, cross-language Top 5 from 43% to 100%, same-language paraphrase #1 from 77% to 90%, all 102 queries #1 from 68% to 90%, keywords and exact phrases unchanged at 100%.">
+</picture>
+
+**On the Scry Bilingual Retrieval Eval, Scry puts the right file at #1 for 90% of queries — cross‑language #1 went from 13% to 77%, and Top 5 is 100%.**
+
+Multilingual models quietly favor text in the query's own language, so in a mixed folder the right English file used to sit below Chinese look‑alikes; Scry now corrects that bias before ranking. Query by query: **30 of 102 rank higher, none lower** — keyword, exact‑phrase and single‑language search included.
+
+| On a plain 4‑core laptop‑class CPU, no GPU | |
+|---|---|
+| ⚡ **23 ms** from query to ranked files over **100,000 chunks** | end‑to‑end with the real model (ONNX · 32 ms with torch); best‑sentence snippets stream in right after |
+| 🧠 **0.746 → 0.948** MRR | the bundled **235 MB** model now scores within 0.006 of the 520 MB add‑on model |
+| 🚀 model ready in **~2 s**, was **~8 s** | ONNX Runtime — identical vectors (cosine 0.99999994), no PyTorch needed |
+| 🔎 BM25 **121 ms → 0.3 ms** per query | incremental inverted index, identical scores; no refit when a file changes |
+| 📦 about **half the size** on disk | torch‑free build: 516 MB vs 1,026 MB for v1.4 |
+
+<sub>How we measured — and how to check us: the eval set (60 hand‑written zh/en documents with look‑alike decoys, 102 queries), every raw result and the benchmark scripts are in [`eval/`](eval/RESULTS.md); `python scripts/eval.py --model models/embed` re‑runs it. It's small and written by us, so read it as "a lot better", not as a leaderboard score — then try it on your own folders. Figures are for the current code; the v1.4 download predates them.</sub>
+
 ## Search your files by what they *mean*
 
 You remember *what a file was about*. You don't remember its name, or which of five drives it's on, or whether you wrote "invoice" or "发票" or "billing". Keyword search fails you exactly there.
@@ -37,17 +58,17 @@ A real semantic engine, not a keyword matcher with a marketing label — and its
 
 | | |
 |---|---|
-| ⚡ **~8 ms** to semantically search **100,000 files** | comfortably interactive; the model is tiny, not an LLM |
-| 🌐 **~0.1 s** whole‑disk semantic results | **zero pre‑indexing** — rides the OS content index |
+| ⚡ **23 ms** to results over **100,000 chunks — on a plain 4‑core CPU** | measured end‑to‑end with the real model (ONNX; 32 ms with torch); the best‑sentence snippets stream in right after |
+| 🌐 **~0.1 s** whole‑disk semantic results with a GPU (~1.5 s on a 4‑core CPU the first time; cached after) | **zero pre‑indexing** — rides the OS content index |
 | 🪶 **118M params · 235 MB** multilingual model | vs the **4–8 GB** local LLMs other "AI search" tools ship |
-| 🌍 **100+ languages · cross‑language** | search 中文 → find English files: measured **1/10 → 10/10** vs an English‑only model |
-| 🔁 **~35 s** to index 100k files, **~0.1 s** to re‑scan | incremental diff measured **235× faster** than a full scan |
+| 🌍 **100+ languages · cross‑language** | search 中文 → find English files: on the Scry Bilingual Retrieval Eval, cross‑language **#1 77%, Top 5 100%** (13% / 43% before the language‑bias correction) |
+| 🔁 **~35 s** to index 100k files on a GPU, **~0.1 s** to re‑scan | incremental diff measured **235× faster** than a full scan; ~20 chunks/s on a 4‑core CPU |
 | 🎯 matches paraphrases with **zero shared words** | exact FAISS + BM25 hybrid, fp16 — half the RAM/disk |
 | 🔒 **0 bytes** leave your machine | fully offline · binds `127.0.0.1` · no account, no telemetry |
-| 📄 **10 formats** (txt·md·pdf·docx·xlsx·pptx·csv·html·rtf) · no Docker | single `.exe` · optional add‑on packs (DLC) |
+| 📄 **21 formats** — Office old & new, **WPS**, **OFD e‑invoices**, PDF (scanned pages too, with OCR), EPUB, ODF, e‑mail | single `.exe` · optional add‑on packs (DLC) |
 | 🖼️ **Reads images too** — opt‑in OCR | screenshots / scans / photos searchable **by meaning** · Windows built‑in engine · **no model download** |
 
-<sub>Speeds measured on a modern GPU (embedding) + FAISS; CPU stays well under the 100 ms interactive bar.</sub>
+<sub>CPU figures measured with the shipped model on a 4‑core 2.1 GHz CPU, no GPU: results in 23 ms at 100k chunks (end to end); the semantic snippets for 20 results follow in ~0.4–1.5 s depending on text length. Indexing speed is where a GPU matters most. Details: [`eval/RESULTS.md`](eval/RESULTS.md).</sub>
 
 ## Three ways to search, one box
 
@@ -59,15 +80,19 @@ A real semantic engine, not a keyword matcher with a marketing label — and its
 
 > **New here? Pick the right mode for your first try.** *Whole‑disk Semantic* is instant and needs zero setup, but it draws its candidates from the Windows index — so a **pure paraphrase or cross‑language query with no shared words** (exactly the "wow" demo) can come up empty there. For that, use **Deep Semantic**: add the folder once, let it index, and it matches *meaning* even when nothing overlaps. Rule of thumb — **Whole‑disk = broad & instant; Deep = deepest meaning.**
 
+**Filters, in plain words.** Add `type:pdf`, `time:上周` / `time:lastweek`, `in:合同`, `after:2024-03` to any search — or *only* filters, e.g. `time:上周 type:pdf`, to list last week's PDFs newest‑first. Filters are applied *inside* retrieval, so a narrow filter never starves the results. A time word in your sentence ("去年的工作总结") is **not** silently applied — that summary was probably written this year — Scry offers it as a one‑click filter instead.
+
+**Find similar.** Every result has a *Find similar* button: Scry uses that file's own meaning as the query and lists the closest other files in your deep index — even ones that share no words with it.
+
 Plus: **bilingual UI (中文 / English, one‑click toggle)**, keyboard‑driven (`Enter` to search, `↑/↓` to move, `Enter` to open), live‑highlighted snippets that show *why* a file matched, and a portable build that runs on any Windows PC with **no Python install**.
 
-**Optional add‑on packs (DLC).** The base stays tiny and 100% offline; heavier extras (starting with a larger multilingual model) download **only when you click**, from this repo's releases, SHA‑256‑verified — see **Add‑ons** in the app.
+**Optional add‑on packs (DLC).** The base stays tiny and 100% offline; heavier extras — a larger multilingual model, **search images by description** ("sunset at the beach", no text in the photo needed), and **ask your files** (a small local model answers with clickable sources) — download **only when you click**, from this repo's releases, SHA‑256‑verified — see **Add‑ons** in the app.
 
 **Read text inside images (opt‑in OCR).** Flip on OCR in Control mode and Scry reads the text in your **screenshots, scans, and photos** with the **Windows built‑in OCR engine** — so a screenshotted receipt or a scanned contract becomes searchable **by meaning**, in whatever languages your Windows has OCR packs for (English + 中文 out of the box on most PCs). It downloads **no model** (Windows provides the engine and language data), stays **100% offline**, adds only ~4 MB to the app, and is **off by default** — turn it on and rescan. It's for *finding*, not perfect transcription: stylized or low‑res text can come out noisy, but semantic search shrugs that off.
 
 ## It learns *you* — on your machine
 
-The more you use Scry, the better it fits you: the **files and folders you actually open float toward the top** for similar searches, weighted toward your recent habits. It's a gentle re‑rank — a fresh query is **never** hijacked, and it **never buries the more relevant result**. And it's personalization with nothing to give up: it learns **only from your own clicks, on your own disk, and never trains the model or sends anything anywhere.** Toggle it off or hit **Forget me** whenever you like.
+The more you use Scry, the better it fits you: the **files and folders you actually open float toward the top** for similar searches, weighted toward your recent habits. It's a gentle re‑rank with a hard rule: a familiar file can rise from far down the list, but it **never displaces the best match for your query** unless the two are practically tied — and a fresh query is **never** hijacked. And it's personalization with nothing to give up: it learns **only from your own clicks, on your own disk, and never trains the model or sends anything anywhere.** Toggle it off or hit **Forget me** whenever you like.
 
 ## The privacy stance (the whole point)
 
@@ -125,7 +150,16 @@ or double‑click **`run.bat`** (Windows). Packaging recipe: [`localsearch/READM
 - **Instant mode:** queries the OS content index via the `Search.CollatorDSO` provider, then embeds and re‑ranks the candidates — global content search with **zero pre‑indexing**.
 - **Robust by design:** crash‑durable index writes (fsync + generation‑stamped, torn saves detected and quarantined), save‑on‑exit, live progress and search *during* indexing, and a single‑thread watcher that survives bulk file copies.
 
-Scry is **multilingual** — one model covering 100+ languages, so you can search in one language and find files written in another (Chinese and English are both first‑class). Cross‑language retrieval is strong but not magic: a query can occasionally lose to a topically‑adjacent same‑language file. The promise isn't to beat a datacenter on a benchmark — it's cloud‑grade *convenience* with **zero** privacy cost.
+Scry is **multilingual** — one model covering 100+ languages, so you can search in one language and find files written in another (Chinese and English are both first‑class). Multilingual embedders score same‑language text higher across the board, so on a mixed folder a Chinese query used to bury the English file it was about; Scry now corrects that bias before ranking (see `scripts/eval.py` — on the bundled bilingual eval set overall MRR rose 0.746 → 0.948, with no loss on single‑language or exact‑phrase queries). It's a small, hand‑written set: read it as "much better", not as a benchmark. The promise isn't to beat a datacenter on a benchmark — it's cloud‑grade *convenience* with **zero** privacy cost.
+
+## More in this version
+
+- **Never downloads your cloud files by accident** — OneDrive/Dropbox "online‑only" placeholders are skipped (reading them would make the sync client download them).
+- **Page‑level results** — "p. 12" on PDF/slide hits, and *Open at p. 12*.
+- **Search as you type** in Deep/Filename modes; weakly related results are dimmed under a divider instead of padding the list.
+- **"Couldn't read" report** — after a scan Scry says what it skipped and how to fix it (e.g. *7 scanned PDFs: turn on OCR*).
+- **Desktop mode** (`--window`): native window, global hotkey **Ctrl+Alt+Space**, tray icon.
+- **Torch‑free build** — same embeddings via ONNX Runtime, about half the download, model ready in ~1.5 s; and a Microsoft Store (MSIX) route for a signed, auto‑updating install — see [`packaging/README.md`](packaging/README.md).
 
 ## Project layout
 
@@ -133,6 +167,7 @@ Scry is **multilingual** — one model covering 100+ languages, so you can searc
 localsearch/          the engine + local web UI (this is the product)
   ├─ engine.py        orchestrator: scan → parse → chunk → embed → index → search
   ├─ index.py         dual index: fp16 FAISS dense + BM25, crash‑durable persistence
+  ├─ bm25.py          incremental BM25 (inverted index; edits never refit)
   ├─ winsearch.py     the "instant whole‑disk" breakthrough (Windows content index)
   ├─ search.py        hybrid retrieval + best‑sentence snippets
   ├─ watcher.py       debounced background re‑indexing
@@ -140,6 +175,7 @@ localsearch/          the engine + local web UI (this is the product)
   ├─ app.py           Flask backend (127.0.0.1 only) + JSON API
   └─ web/index.html   single‑page UI, bilingual, zero build step
 demo_*.py             runnable end‑to‑end examples (incl. demo_personalize.py)
+tests/                pytest suite (any OS, no model download): python -m pytest
 run.bat               double‑click launcher
 ```
 

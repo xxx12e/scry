@@ -4,7 +4,7 @@ import re
 
 log = logging.getLogger("localsearch.winsearch")
 _PROVIDER = "Provider=Search.CollatorDSO;Extended Properties='Application=Windows';"
-_TERM = re.compile(r"[a-zA-Z0-9]+")
+_TERM = re.compile(r"[^\W_]+")          # words of any script (CJK split out below)
 _CJK_RUN = re.compile(r"[぀-ヿ㐀-䶿一-鿿]+")
 
 
@@ -22,7 +22,7 @@ def _sanitize(text):
 
 def _or_terms(terms):
     """Split a sanitized query into OR-able terms: words + CJK bigrams."""
-    out = list(_TERM.findall(terms))
+    out = list(_TERM.findall(_CJK_RUN.sub(" ", terms)))
     for run in _CJK_RUN.findall(terms):
         if len(run) <= 2:
             out.append(run)
@@ -46,8 +46,12 @@ def available():
 
 
 def _run_sql(sql):
-    """Run one SystemIndex query -> [(path, snippet)] via a single GetRows call."""
-    import win32com.client
+    """Run one SystemIndex query -> [(path, snippet)] via a single GetRows call;
+    None if the query itself failed (vs [] for no matches)."""
+    try:
+        import win32com.client
+    except ImportError:               # not Windows / no pywin32: provider unavailable
+        return None
     out = []
     conn = None
     try:
@@ -65,6 +69,7 @@ def _run_sql(sql):
         rs.Close()
     except Exception as e:
         log.warning("Windows Search query failed: %s", e)
+        out = None
     finally:
         try:
             if conn is not None:
@@ -79,16 +84,33 @@ def _build_sql(where, limit):
             f"FROM SystemIndex WHERE {where} ORDER BY System.Search.Rank DESC")
 
 
-def query(text, limit=200, scope=None, min_results=None):
-    """Whole-disk content search via the OS index -> [(path, snippet)], best-first."""
+def _ext_sql(exts):
+    if not exts:
+        return ""
+    return " AND (%s)" % " OR ".join(
+        "System.FileExtension = '%s'" % e.replace("'", "''") for e in sorted(exts))
+
+
+def query(text, limit=200, scope=None, min_results=None, exts=None):
+    """Whole-disk content search via the OS index -> [(path, snippet)], best-first.
+    `exts` narrows by extension in SQL when the provider accepts it; if that
+    clause fails or matches nothing, the query is retried without it (callers
+    post-filter), so an unexpected provider can never silently empty a search."""
     terms = _sanitize(text)
     if not terms:
         return []
     scope_sql = ""
     if scope:
         scope_sql = " AND SCOPE='file:%s'" % str(scope).replace("'", "''")
-    strict = _run_sql(_build_sql(
-        f"FREETEXT(System.Search.Contents, '{terms}'){scope_sql}", limit))
+    extra = _ext_sql(exts)
+
+    def run(where):
+        rows = _run_sql(_build_sql(where + scope_sql + extra, limit))
+        if extra and not rows:
+            rows = _run_sql(_build_sql(where + scope_sql, limit))
+        return rows or []
+
+    strict = run(f"FREETEXT(System.Search.Contents, '{terms}')")
     want = min_results if min_results is not None else 0
     if len(strict) >= max(want, limit // 4):
         return strict
@@ -96,11 +118,31 @@ def query(text, limit=200, scope=None, min_results=None):
     if len(ors) < 2:
         return strict
     contains = " OR ".join(f'"{t}"' for t in ors)
-    loose = _run_sql(_build_sql(
-        f"CONTAINS(System.Search.Contents, '{contains}'){scope_sql}", limit))
+    loose = run(f"CONTAINS(System.Search.Contents, '{contains}')")
     seen = {p for p, _ in strict}
     merged = strict + [(p, s) for p, s in loose if p not in seen]
     return merged[:limit]
+
+
+def filename_query(text, limit=50, scope=None, exts=None):
+    """Filename search through the OS index -- the fallback when Everything is
+    not installed. Covers only indexed locations (usually the user folders),
+    not the whole disk. Everything-style * and ? wildcards are honoured.
+    -> [path] newest first, or None if the provider failed."""
+    terms = [t for t in re.split(r"\s+", text.replace("'", " ").replace('"', " ")) if t]
+    where = []
+    for t in terms[:8]:
+        like = t.replace("%", "").replace("_", "").replace("*", "%").replace("?", "_")
+        where.append("System.FileName LIKE '%%%s%%'" % like)
+    if scope:
+        where.append("SCOPE='file:%s'" % str(scope).replace("'", "''"))
+    if not where and not exts:
+        return []
+    sql = (f"SELECT TOP {int(limit)} System.ItemUrl, System.ItemName FROM SystemIndex "
+           f"WHERE {' AND '.join(where) or '1=1'}{_ext_sql(exts)} "
+           f"ORDER BY System.DateModified DESC")
+    rows = _run_sql(sql)
+    return None if rows is None else [p for p, _ in rows]
 
 
 if __name__ == "__main__":

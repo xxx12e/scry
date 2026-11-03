@@ -11,16 +11,32 @@ from tqdm import tqdm
 
 from .config import Config
 from . import parser
+from . import resources
 from . import ocr
 from .parser import parse_file, is_supported
 from .chunker import chunk_text, tokenize
 from .embedder import Embedder
 from .index import DualIndex, IndexVersionError, IndexCorruptError
-from .search import retrieve, make_snippets, filename_search, Hit
+from .search import (retrieve, make_snippets, lexical_snippet, filename_search, Hit,
+                     VecCache)
 from .personalize import Personalizer, _norm
 from . import dlc
 
 log = logging.getLogger("localsearch")
+
+# Windows cloud-file placeholders (OneDrive Files On-Demand, iCloud, Dropbox...):
+# reading their CONTENT makes the sync client download them -- with Desktop/
+# Documents in OneDrive by default on Windows 11, one scan could pull down the
+# whole cloud drive. stat() reads only the directory entry, so checking is free.
+_FA_OFFLINE = 0x00001000
+_FA_RECALL_ON_OPEN = 0x00040000
+_FA_RECALL_ON_DATA_ACCESS = 0x00400000
+_CLOUD_ONLY = _FA_OFFLINE | _FA_RECALL_ON_OPEN | _FA_RECALL_ON_DATA_ACCESS
+
+
+def cloud_only(st):
+    """True if this stat result is a placeholder whose content is not on disk."""
+    return bool(getattr(st, "st_file_attributes", 0) & _CLOUD_ONLY)
 
 
 def _setup_logging(index_dir):
@@ -56,20 +72,31 @@ class SearchEngine:
         self._instant_cache = OrderedDict()
         self._cache_lock = threading.Lock()
         self.personalizer = Personalizer(self.index_dir, self.cfg)
+        self._sent_cache = VecCache(20000)  # sentence -> vec (snippets of refined queries)
+        self._q_cache = VecCache(256)       # query -> vec
+        self._snip_jobs = OrderedDict()     # id -> deferred snippet work (progressive UI)
+        self._snip_lock = threading.Lock()
         self._last_shown = OrderedDict()  # normcased path -> vec (recent shown, for record_open)
         self._shown_lock = threading.Lock()
         self.load_error = ""
+        self.filename_backend = None      # "everything" | "windows" (fallback) | None
+        self.llm = None                   # local Q&A model (DLC), loaded on first use
+        self.llm_lock = threading.Lock()  # llama.cpp contexts are not thread-safe
+        self.clip = None                  # image-search pack (DLC), loaded on first use
+        self.images = None                # ImageIndex for it
+        self._clip_lock = threading.Lock()
         # optional DLC model pack overrides the bundled model (auto-scanned)
         ov = dlc.model_override(self.index_dir)
         if ov:
             self.cfg.model_name = ov
             log.info("DLC model pack active: %s", ov)
         parser.set_ocr(self.cfg.ocr)     # image OCR (opt-in; Windows built-in)
+        self._model_tag = resources.model_tag(self.cfg.model_name)
         self.index = None
         if DualIndex.exists(self.index_dir):
             try:
                 self.index = DualIndex.load(self.index_dir)
-                if self.index.model_tag and self.index.model_tag != self.cfg.model_name:
+                if not resources.model_tag_matches(self.index.model_tag, self.cfg.model_name):
                     raise IndexVersionError("embedding model changed")
             except IndexVersionError as e:
                 log.warning("index version changed (%s); rebuild needed", e)
@@ -90,14 +117,24 @@ class SearchEngine:
     @property
     def embedder(self):
         if self._embedder is None:
+            mismatch = False
             with self._emb_lock:
                 if self._embedder is None:
                     emb = Embedder(self.cfg)
-                    if self.index is not None and self.index.dim != emb.dim:
-                        log.error("model dim %d != index dim %d -- rebuild the index "
-                                  "(delete %s) after changing the model",
-                                  emb.dim, self.index.dim, self.index_dir)
+                    idx = self.index
+                    mismatch = idx is not None and idx.dim != emb.dim
                     self._embedder = emb
+            if mismatch:
+                # vectors of another width would crash every FAISS search: move the
+                # index aside so the next scan rebuilds it (outside _emb_lock to
+                # keep the _lock -> _emb_lock order used by _ensure_index)
+                with self._lock:
+                    if self.index is not None and self.index.dim != self._embedder.dim:
+                        log.error("model dim %d != index dim %d -- index quarantined, "
+                                  "rescan to rebuild", self._embedder.dim, self.index.dim)
+                        self.index = None
+                        DualIndex.quarantine(self.index_dir)
+                        self.load_error = "idx_version"
         return self._embedder
 
     def warmup(self):
@@ -113,14 +150,16 @@ class SearchEngine:
     def prepare_index(self):
         """Build BM25 off the startup critical path (loads are lazy now)."""
         try:
-            self._rebuild_bm25_coalesced(force=True)
+            # derived state only: building it must not schedule a full index save
+            # (that rewrote the whole index ~2 min after every launch)
+            self._rebuild_bm25_coalesced(force=True, mark_save=False)
         except Exception as e:
             log.warning("bm25 prepare failed: %s", e)
 
     def _ensure_index(self):
         if self.index is None:
             self.index = DualIndex(self.embedder.dim)
-        self.index.model_tag = self.cfg.model_name    # stamp for the DLC/model guard
+        self.index.model_tag = self._model_tag    # stamp for the DLC/model guard
 
 
     def _hash(self, path):
@@ -131,8 +170,18 @@ class SearchEngine:
         return h.hexdigest()
 
     def _fmeta(self, path, mtime, size):
-        return dict(mtime=mtime, size=size,
-                    hash=self._hash(path) if self.cfg.change_detection == "hash" else None)
+        m = dict(mtime=mtime, size=size,
+                 hash=self._hash(path) if self.cfg.change_detection == "hash" else None)
+        if parser._ocr_active():
+            m["ocr"] = True               # parsed with OCR available (scanned PDFs)
+        return m
+
+    def _needs_ocr_retry(self, path, old):
+        """A PDF that yielded no text before OCR was turned on is re-read once
+        OCR is on (its mtime never changes, so the diff alone would skip it)."""
+        return (parser._ocr_active() and not old.get("ocr")
+                and path.lower().endswith(".pdf")
+                and not self.index.file_chunks.get(path))
 
     def _unchanged(self, old, path, mtime, size):
         if self.cfg.change_detection == "hash":
@@ -150,9 +199,139 @@ class SearchEngine:
             return True
         return False
 
-    def _walk(self, root):
-        """scandir walk yielding (path, mtime, size); prunes system/junk dirs."""
+    def in_excluded_dir(self, path, roots):
+        """True if `path` lies under a dir that _walk() would prune (system/junk/
+        hidden), judged relative to the most specific of `roots` -- so the live
+        watcher indexes exactly what a rescan would, and a folder the user added
+        explicitly is never excluded just because of where it lives."""
+        full = os.path.abspath(str(path))
+        key = os.path.normcase(full)
+        best = None
+        for r in roots:
+            rn = os.path.normcase(os.path.abspath(str(r))).rstrip("\\/")
+            if key.startswith(rn + os.sep) and (best is None or len(rn) > len(best)):
+                best = rn
+        if best is None:
+            return False
+        parts = full[len(best) + 1:].split(os.sep)[:-1]     # dirs below the root
+        return any(self._excluded_dir(d) for d in parts if d)
+
+    # ---- ask your files (optional local LLM pack) ----
+    def qa_backend(self):
+        if self.llm is None:
+            from . import qa
+            from .embedder import _has
+            path = qa.find_model(dlc.llm_dir(self.index_dir))
+            if path is None or not _has("llama_cpp"):
+                return None
+            with self.llm_lock:
+                if self.llm is None:
+                    try:
+                        self.llm = qa.LlamaBackend(path)
+                    except Exception as e:
+                        log.warning("local Q&A model unusable: %s", e)
+                        return None
+        return self.llm
+
+    def qa_status(self):
+        from .embedder import _has
+        return dict(available=self.llm is not None or (
+            dlc.llm_dir(self.index_dir) is not None and _has("llama_cpp")))
+
+    # ---- image search by description (optional CLIP pack) ----
+    def images_enabled(self):
+        return dlc.clip_dir(self.index_dir) is not None
+
+    def wants_image(self, path):
+        return self.images_enabled() and os.path.splitext(str(path))[1].lower() in ocr.IMAGE_EXT
+
+    def _clip(self):
+        if self.clip is None:
+            d = dlc.clip_dir(self.index_dir)
+            if d is None:
+                return None
+            with self._clip_lock:
+                if self.clip is None:
+                    try:
+                        from .clip import ClipBackend, ImageIndex
+                        clip = ClipBackend(d)
+                        self.images = ImageIndex.load(self.index_dir, clip.tag)
+                        self.clip = clip
+                    except Exception as e:
+                        log.warning("image search pack unusable: %s", e)
+                        return None
+        return self.clip
+
+    def image_status(self):
+        on = self.images_enabled()
+        return dict(available=on, count=len(self.images) if (on and self.images is not None) else None)
+
+    def _build_images(self, found, dirs, cancel_check=None, progress=None):
+        """Embed new/changed images under `dirs`, drop deleted ones (diff, like text)."""
+        clip = self._clip()
+        if clip is None or found is None:
+            return {}
+        current = {p: (m, s) for p, m, s in found}
+        with self._lock:
+            ix = self.images
+            removed = [p for p in list(ix.meta) if _under_any(p, dirs) and p not in current]
+            for p in removed:
+                ix.remove(p)
+            todo = [p for p, (m, s) in current.items() if not ix.unchanged(p, m, s)]
+        added = 0
+        for a in range(0, len(todo), 16):
+            if cancel_check is not None and cancel_check():
+                break
+            batch = todo[a:a + 16]
+            vecs, ok = clip.embed_images(batch)         # heavy: outside the lock
+            with self._lock:
+                for p, v in zip(ok, vecs):
+                    ix.add(p, current[p][0], current[p][1], v)
+                    added += 1
+            if progress is not None:
+                try:
+                    progress(min(a + 16, len(todo)), len(todo), batch[-1])
+                except Exception:
+                    pass
+        if removed or added:
+            with self._lock:
+                ix.save(self.index_dir)
+        return dict(images_added=added, images_removed=len(removed), images=len(ix))
+
+    def _update_image(self, path, st):
+        clip = self._clip()
+        if clip is None or self._cloud_skip(st):
+            return
+        with self._lock:
+            if self.images.unchanged(path, st.st_mtime, st.st_size):
+                return
+        vecs, ok = clip.embed_images([path])
+        if ok:
+            with self._lock:
+                self.images.add(path, st.st_mtime, st.st_size, vecs[0])
+                self.images.save(self.index_dir)
+
+    def search_images(self, query, top_k=20, filters=None):
+        clip = self._clip()
+        if clip is None or not self.images:
+            return []
+        q = clip.embed_texts([query])[0]
+        filtered = filters is not None and filters.filtered
+        with self._lock:
+            res = self.images.search(q, top_k * 4 if filtered else top_k)
+        hits = [Hit(p, s, "", 0, 0) for p, s in res if not filtered or filters.match(p)]
+        return hits[:top_k]
+
+    def _cloud_skip(self, st):
+        return not self.cfg.index_cloud_files and cloud_only(st)
+
+    def _walk(self, root, unread=None, images=None):
+        """scandir walk yielding (path, mtime, size, cloud_only); prunes system/
+        junk dirs. `unread` (Counter) tallies document-like files we skip --
+        unsupported types, and images while OCR is off -- by extension."""
         exts = tuple(e.lower() for e in parser.current_exts())
+        skipped_kinds = parser.UNREAD_DOCLIKE | (frozenset() if parser._ocr_active()
+                                                 else frozenset(ocr.IMAGE_EXT))
         max_bytes = self.cfg.max_file_mb * 1e6
         stack = [str(root)]
         while stack:
@@ -171,7 +350,15 @@ class SearchEngine:
                                 stack.append(entry.path)
                             continue
                         dot = name.rfind(".")
-                        if dot < 0 or name[dot:].lower() not in exts:
+                        ext = name[dot:].lower() if dot >= 0 else ""
+                        if images is not None and ext in ocr.IMAGE_EXT:
+                            ist = entry.stat()
+                            if ist.st_size <= max_bytes and not self._cloud_skip(ist):
+                                images.append((entry.path, ist.st_mtime, ist.st_size))
+                        if ext not in exts:
+                            if (unread is not None and ext in skipped_kinds
+                                    and not (images is not None and ext in ocr.IMAGE_EXT)):
+                                unread[ext] += 1
                             continue
 
 
@@ -179,7 +366,7 @@ class SearchEngine:
                         if st.st_size > max_bytes:
                             log.info("skip oversized file: %s", entry.path)
                             continue
-                        yield entry.path, st.st_mtime, st.st_size
+                        yield entry.path, st.st_mtime, st.st_size, self._cloud_skip(st)
                     except OSError as e:
                         log.warning("scan entry failed: %s", e)
 
@@ -209,8 +396,18 @@ class SearchEngine:
         if not text:
             return [], fmeta, True
         try:
-            chunks = chunk_text(text, self.cfg.chunk_max_words,
-                                self.cfg.chunk_overlap_sentences)
+            if "\f" in text:
+                # paged formats: chunk page by page, so a chunk never straddles a
+                # page break and "open at page N" lands where the match is
+                chunks, base = [], 0
+                for page_no, seg in enumerate(text.split("\f"), 1):
+                    for t, st, en in chunk_text(seg, self.cfg.chunk_max_words,
+                                                self.cfg.chunk_overlap_sentences):
+                        chunks.append((t, base + st, base + en, page_no))
+                    base += len(seg) + 1
+            else:
+                chunks = chunk_text(text, self.cfg.chunk_max_words,
+                                    self.cfg.chunk_overlap_sentences)
             return chunks, fmeta, False
         except Exception as e:
             log.warning("chunk failed, skipping %s: %s: %s", path, type(e).__name__, e)
@@ -256,13 +453,17 @@ class SearchEngine:
         """Incremental scan/parse/embed/index; cancellable, searches stay live."""
         dirs = [str(Path(d).resolve()) for d in dirs]
         _ = self.embedder
-        current = {}
+        from collections import Counter
+        current, cloud, unread, failed_by = {}, set(), Counter(), Counter()
+        images = [] if self.images_enabled() else None
         for d in dirs:
             if not os.path.isdir(d):
                 log.warning("not a directory, skipping: %s", d)
                 continue
-            for p, mtime, size in self._walk(d):
+            for p, mtime, size, is_cloud in self._walk(d, unread, images):
                 current[p] = (mtime, size)
+                if is_cloud:
+                    cloud.add(p)
 
 
         with self._lock:
@@ -273,17 +474,26 @@ class SearchEngine:
                 if p not in current:
                     deleted.append(p)
                     removed += 1
-            todo, skipped = [], 0
+            todo, skipped, cloud_skipped = [], 0, 0
             for path, (mtime, size) in current.items():
                 old = self.index.file_meta.get(path)
-                if old is not None and self._unchanged(old, path, mtime, size):
+                if path in cloud:
+                    # never read (= download) it; an entry indexed while it was
+                    # local stays valid -- "free up space" doesn't change content
+                    if old is not None:
+                        skipped += 1
+                    else:
+                        cloud_skipped += 1
+                    continue
+                if (old is not None and self._unchanged(old, path, mtime, size)
+                        and not self._needs_ocr_retry(path, old)):
                     skipped += 1
                 else:
                     todo.append((path, mtime, size, old is not None))
             self.index.remove_files(deleted)
 
         added = updated = failed = cancelled = 0
-        total = len(current)
+        total = len(current) - cloud_skipped
         done = skipped
         batch, batch_chunks = [], 0
         existed_of = {}
@@ -331,23 +541,41 @@ class SearchEngine:
                     flush_batch()
         flush_batch()
 
-        self._rebuild_bm25_coalesced(force=True)
-        if persist:
-            try:
-                self.save()
-            except Exception as e:
-                log.error("build save failed (periodic save will retry): %s", e)
-                self._schedule_save()
+        if added or updated or removed or failed:
+            self._rebuild_bm25_coalesced(force=True)
+            if persist:
+                try:
+                    self.save()
+                except Exception as e:
+                    log.error("build save failed (periodic save will retry): %s", e)
+                    self._schedule_save()
+        # else: a no-op diff (e.g. the startup catch-up scan) touches nothing on disk
         stats = dict(added=added, updated=updated, removed=removed, skipped=skipped,
-                     failed=failed, cancelled=bool(cancelled))
+                     failed=failed, cancelled=bool(cancelled), cloud_skipped=cloud_skipped,
+                     # coverage report: what could not be read, by extension
+                     unsupported=dict(unread.most_common(12)),
+                     failed_by=dict(failed_by.most_common(12)),
+                     ocr=parser._ocr_active())
         with self._lock:
             n_files = len(self.index.file_chunks) if self.index else 0
             n_chunks = len(self.index.chunk_meta) if self.index else 0
+            if self.index is not None:     # every indexed file that yielded no text
+                for p, cids in self.index.file_chunks.items():
+                    if not cids and _under_any(p, dirs):
+                        failed_by[os.path.splitext(p)[1].lower() or "?"] += 1
+        stats["failed_by"] = dict(failed_by.most_common(12))
+        if images is not None and not cancelled:
+            stats.update(self._build_images(images, dirs, cancel_check, progress_callback))
         log.info("build done: %s | total %d files / %d chunks", stats, n_files, n_chunks)
         return stats
 
     def update_file(self, path, persist=False, defer=False):
         path = str(Path(path).resolve())
+        if self.wants_image(path) and os.path.exists(path):
+            try:
+                self._update_image(path, os.stat(path))
+            except OSError:
+                pass
         if not os.path.exists(path) or not is_supported(path):
             return 0
         try:
@@ -355,7 +583,7 @@ class SearchEngine:
             mtime, size = st.st_mtime, st.st_size
         except OSError:
             return 0
-        if size > self.cfg.max_file_mb * 1e6:
+        if size > self.cfg.max_file_mb * 1e6 or self._cloud_skip(st):
             return 0
         with self._lock:
             self._ensure_index()
@@ -382,6 +610,10 @@ class SearchEngine:
 
     def remove_file(self, path, persist=False, defer=False):
         path = str(Path(path).resolve())
+        if self.images is not None:
+            with self._lock:
+                if self.images.remove(path):
+                    self.images.save(self.index_dir)
         with self._lock:
             if self.index is None:
                 return 0
@@ -432,18 +664,31 @@ class SearchEngine:
             self._dirty = False
             self._rebuild_bm25_coalesced(force=True)
 
-    def _rebuild_bm25_coalesced(self, force=False):
-        """Snapshot tokens under the lock, fit BM25 outside it, swap back under it."""
+    def _rebuild_bm25_coalesced(self, force=False, mark_save=True):
+        """Make sure BM25 exists, then (if `mark_save`) schedule a save.
+
+        BM25 is maintained incrementally by the index, so this only does real
+        work once per load: snapshot tokens under the lock, build outside it,
+        install under it (mutations made meanwhile are replayed). `mark_save` says
+        the index content changed (BM25 itself is never saved); re-tokenized
+        chunks (tokenizer upgrade) are worth persisting either way."""
+        regenerated = 0
         with self._lock:
-            if self.index is None:
+            ix = self.index
+            if ix is None:
                 return
-            cids, toks = self.index.bm25_inputs()
-        bm25 = DualIndex.build_bm25(toks)
-        with self._lock:
-            if self.index is not None:
-                self.index.set_bm25(cids, bm25)
-        self._save_pending = True
-        self._schedule_save()
+            if not ix.bm25_built():
+                bid, cids, toks, missing = ix.bm25_inputs()
+            else:
+                bid = None
+        if bid is not None:
+            bm25 = DualIndex.build_bm25(cids, toks, missing)   # outside the lock
+            with self._lock:
+                if self.index is ix and ix.set_bm25(bid, bm25):
+                    regenerated = len(bm25.regenerated)
+        if mark_save or regenerated:
+            self._save_pending = True
+            self._schedule_save()
 
     def _schedule_save(self):
         if self._closing or self._save_timer is not None:
@@ -478,10 +723,48 @@ class SearchEngine:
             raise
 
 
-    def search_semantic(self, query, top_k=10):
+    def _qvec(self, query):
+        v = self._q_cache.get_many([query])[0]
+        if v is None:
+            v = self.embedder.embed_query(query)
+            self._q_cache.put_many([query], [v])
+        return v
+
+    def _allowed_cids(self, qf):
+        """Chunk ids of indexed files passing the query filters (under the lock)."""
+        fc = self.index.file_chunks
+        out = []
+        for p, meta in self.index.file_meta.items():
+            if qf.match(p, meta.get("mtime")):
+                out.extend(fc.get(p, ()))
+        return np.unique(np.asarray(out, np.int64))
+
+    def browse(self, qf, top_k=20):
+        """No words, only filters ("time:上周 type:pdf"): matching files of the deep
+        index, newest first, with their opening sentence as the snippet."""
+        with self._lock:
+            if self.index is None:
+                return []
+            rows = sorted(((meta.get("mtime") or 0, p) for p, meta in self.index.file_meta.items()
+                           if qf.match(p, meta.get("mtime"))), reverse=True)[:top_k]
+            hits = []
+            for _, p in rows:
+                cids = self.index.file_chunks.get(p) or []
+                meta = self.index.chunk_meta.get(cids[0]) if cids else None
+                text = meta["text"] if meta else ""
+                hits.append(Hit(p, None, text, 0, 0,
+                                snippet=lexical_snippet(text, []) if text else "",
+                                cid=cids[0] if cids else -1))
+        return hits
+
+    def search_semantic(self, query, top_k=10, snippets="semantic", filters=None):
+        """Hybrid deep search. snippets="semantic" embeds each hit's sentences to
+        pick the best one (~95% of a CPU query's time); "lexical" returns at once
+        with a term-overlap snippet -- pair it with queue_snippets() and
+        resolve_snippets() to upgrade them progressively."""
         if self.index is None or self.index.dense.ntotal == 0:
             return []
-        qvec = self.embedder.embed_query(query)
+        qvec = self._qvec(query)
         qtokens = tokenize(query)
         # pull a wider pool when personalizing, so the personal prior can lift a
         # genuinely-relevant file the base score ranked just below the cut.
@@ -489,22 +772,153 @@ class SearchEngine:
         with self._lock:
             if self.index is None or self.index.dense.ntotal == 0:
                 return []
-            self.index.ensure_bm25()
+            allowed = None
+            if filters is not None and filters.filtered:
+                allowed = self._allowed_cids(filters)
+                if not len(allowed):
+                    return []
+            if not self.index.bm25_building():
+                self.index.ensure_bm25()       # library use; the app pre-builds it
+            # else: still building in the background -> dense-only for now rather
+            # than stalling every search (and the status poll) on the lock
+            info = {}
             hits = retrieve(self.index, qvec, qtokens, want,
-                            self.cfg.alpha, self.cfg.fusion_fetch)
-            vecs = ({h.path: self._reconstruct(h.cid) for h in hits}
-                    if self.personalizer.enabled else {})
+                            self.cfg.alpha, self.cfg.fusion_fetch, allowed,
+                            query_text=query, balance=self.cfg.lang_balance, info=info)
+            vecs = {h.path: self._reconstruct(h.cid) for h in hits}
+            from .search import text_lang
+            for h in hits:      # fused scores are relative; cosine is the absolute signal
+                v = vecs.get(h.path)
+                h.sim = float(v @ qvec[0]) if v is not None else None
+                if h.sim is not None and info and text_lang(h.chunk_text) != info["qlang"]:
+                    h.sim += info["shift"]       # same scale as same-language hits
+            if not self.personalizer.enabled:
+                vecs = {}
         hits = self._personalize(hits, vecs, top_k)
-        make_snippets(hits, qvec, self.embedder,
-                      max_sent_chars=self.cfg.snippet_sentence_chars,
-                      max_sents=self.cfg.snippet_sents_per_hit)
+        if snippets == "semantic":
+            make_snippets(hits, qvec, self.embedder,
+                          max_sent_chars=self.cfg.snippet_sentence_chars,
+                          max_sents=self.cfg.snippet_sents_per_hit, cache=self._sent_cache)
+        else:
+            for h in hits:
+                h.snippet = lexical_snippet(h.chunk_text, qtokens,
+                                            max_sents=self.cfg.snippet_sents_per_hit)
         return hits
 
-    def search_filename(self, query, limit=50, scope=None):
-        q = query
+    # ---- more like this ----
+    def similar(self, path, top_k=10):
+        """Files whose content is closest to `path`: its mean chunk embedding is
+        the query (dense only -- there are no words). A file outside the deep
+        index is embedded on the fly from its first chunks. -> (hits, qvec)."""
+        own, vecs = None, []
+        with self._lock:
+            if self.index is None or self.index.dense.ntotal == 0:
+                return [], None
+            cids = self.index.file_chunks.get(path)
+            if cids is None:
+                key = os.path.normcase(os.path.abspath(path))
+                own = next((p for p in self.index.file_chunks
+                            if os.path.normcase(p) == key), None)
+                cids = self.index.file_chunks.get(own) if own else None
+            else:
+                own = path
+            for c in (cids or [])[:64]:
+                v = self._reconstruct(c)
+                if v is not None:
+                    vecs.append(v)
+        if not vecs:
+            try:
+                st = os.stat(path)
+                if st.st_size > self.cfg.max_file_mb * 1e6 or self._cloud_skip(st):
+                    return [], None
+            except OSError:
+                return [], None
+            text = parse_file(path)
+            chunks = chunk_text(text, self.cfg.chunk_max_words)[:8] if text else []
+            if not chunks:
+                return [], None
+            vecs = list(self.embedder.embed_docs([c[0] for c in chunks]))
+        q = np.mean(np.vstack(vecs), axis=0)
+        q = (q / (np.linalg.norm(q) or 1.0)).astype(np.float32)[None, :]
+        skip = {os.path.normcase(own or path)}
+        with self._lock:
+            if self.index is None:
+                return [], None
+            fetch = min(self.index.dense.ntotal, top_k * 4 + len(cids or []))
+            best = {}
+            for cid, score in self.index.search_dense(q, fetch):
+                meta = self.index.chunk_meta.get(cid)
+                if meta is None or os.path.normcase(meta["path"]) in skip:
+                    continue
+                if meta["path"] not in best:
+                    best[meta["path"]] = Hit(meta["path"], score, meta["text"], meta["start"],
+                                             meta["end"], cid=cid, page=meta.get("page"))
+                if len(best) >= top_k:
+                    break
+        hits = list(best.values())
+        for h in hits:
+            h.snippet = lexical_snippet(h.chunk_text, [])
+        return hits, q
+
+    # ---- progressive snippets ----
+    def queue_snippets(self, mode, query, hits):
+        """Remember hits whose semantic snippets the UI will ask for next
+        (`query`: the query text, or a ready query vector as from similar());
+        returns an id for resolve_snippets() (bounded, one-shot)."""
+        import secrets
+        sid = secrets.token_hex(8)
+        job = (mode, query, [Hit(h.path, h.score, h.chunk_text, h.char_start, h.char_end,
+                                 snippet=h.snippet, terms=h.terms) for h in hits])
+        with self._snip_lock:
+            self._snip_jobs[sid] = job
+            while len(self._snip_jobs) > 16:
+                self._snip_jobs.popitem(last=False)
+        return sid
+
+    def resolve_snippets(self, sid):
+        """{path: best snippet} for a queued result set ({} if unknown/expired)."""
+        with self._snip_lock:
+            job = self._snip_jobs.pop(sid, None)
+        if job is None:
+            return {}
+        mode, query, hits = job
+        qvec = query if isinstance(query, np.ndarray) else self._qvec(query)
+        if mode == "instant":
+            self._deepen_instant_snippets(hits, qvec)
+        else:
+            make_snippets(hits, qvec, self.embedder,
+                          max_sent_chars=self.cfg.snippet_sentence_chars,
+                          max_sents=self.cfg.snippet_sents_per_hit, cache=self._sent_cache)
+        return {h.path: h.snippet for h in hits}
+
+    def search_filename(self, query, limit=50, scope=None, filters=None):
+        """Everything filename search. Filters are translated to Everything's own
+        syntax (ext:, dm:, path:) AND re-checked here, so a version that reads a
+        clause differently can cost recall but never return a wrong file."""
+        parts = [query] if query else []
         if scope:
-            q = f'"{scope}" {query}'
-        return filename_search(self.cfg.es_exe, q, limit, self.cfg.es_timeout_s)
+            parts.insert(0, f'"{scope}"')
+        if filters is not None and filters.filtered:
+            import time as _t
+            if filters.exts:
+                parts.append("ext:" + ";".join(sorted(e.lstrip(".") for e in filters.exts)))
+            if filters.after is not None:
+                parts.append("dm:>=" + _t.strftime("%Y-%m-%d", _t.localtime(filters.after)))
+            if filters.before is not None:
+                parts.append("dm:<" + _t.strftime("%Y-%m-%d", _t.localtime(filters.before)))
+            parts += ['path:"%s"' % f["value"].replace('"', "") for f in filters.filters
+                      if f["kind"] == "in"]
+            limit = limit * 3
+        paths = filename_search(self.cfg.es_exe, " ".join(parts), limit, self.cfg.es_timeout_s)
+        self.filename_backend = "everything"
+        if paths is None:                      # no Everything: the OS index instead
+            from . import winsearch
+            paths = winsearch.filename_query(query, limit, scope,
+                                             filters.exts if filters is not None else None)
+            self.filename_backend = "windows" if paths is not None else None
+        if paths is not None and filters is not None and filters.filtered:
+            paths = [p for p in paths if filters.match(p)][:limit // 3]
+        return paths
 
     # ---- personalization (local, training-free) ----
     def _reconstruct(self, cid):
@@ -569,14 +983,19 @@ class SearchEngine:
                     cache.popitem(last=False)
         return texts, np.vstack(rows)
 
-    def search_instant_global(self, query, top_k=20, candidates=None, scope=None):
-        """Whole-disk semantic search, no pre-indexing (Windows Search + bge rerank)."""
+    def search_instant_global(self, query, top_k=20, candidates=None, scope=None,
+                              deepen=True, filters=None):
+        """Whole-disk semantic search, no pre-indexing (Windows Search + e5 rerank)."""
         from . import winsearch
-        cands = winsearch.query(query, limit=candidates or self.cfg.instant_candidates,
-                                scope=scope, min_results=top_k)
+        limit = candidates or self.cfg.instant_candidates
+        filtered = filters is not None and filters.filtered
+        cands = winsearch.query(query, limit=limit * 3 if filtered else limit, scope=scope,
+                                min_results=top_k, exts=filters.exts if filtered else None)
+        if filtered:              # authoritative check (the SQL clause is best-effort)
+            cands = [(p, s) for p, s in cands if filters.match(p)][:limit]
         if not cands:
             return []
-        qvec = self.embedder.embed_query(query)
+        qvec = self._qvec(query)
         texts, cvecs = self._embed_candidates(cands)
         sims = cvecs @ qvec[0]
         want = top_k * 3 if self.personalizer.enabled else top_k
@@ -590,7 +1009,7 @@ class SearchEngine:
                             char_start=0, char_end=0, snippet=text[:260], terms=qtokens))
             vecs[path] = cvecs[int(i)]
         hits = self._personalize(hits, vecs, top_k)
-        if self.cfg.instant_deep_snippet:
+        if deepen and self.cfg.instant_deep_snippet:
             self._deepen_instant_snippets(hits, qvec)
         return hits
 
@@ -610,7 +1029,8 @@ class SearchEngine:
             if not (low.endswith(".txt") or low.endswith(".md")):
                 continue
             try:
-                if os.path.getsize(h.path) > max_bytes:
+                st = os.stat(h.path)
+                if st.st_size > max_bytes or self._cloud_skip(st):
                     continue
                 text = Path(h.path).read_text(encoding="utf-8", errors="replace")
             except OSError:
@@ -704,6 +1124,8 @@ def _under_any(path, dirs):
     p = os.path.normcase(os.path.abspath(path))
     for d in dirs:
         d = os.path.normcase(os.path.abspath(d))
-        if p == d or p.startswith(d + os.sep):
+        # a drive root ("c:\\", "/") already ends in a separator: strip before
+        # appending one, or nothing would ever count as "under" a whole drive
+        if p == d or p.startswith(d.rstrip("\\/") + os.sep):
             return True
     return False

@@ -1,0 +1,4 @@
+# machine: Model name: Intel(R) Xeon(R) Processor @ 2.10GHz, 4 cores, Linux; python 3.13.18
+backend=onnx  model ready 2.9 s  index 100,000 chunks / 25,000 files  top_k=20
+results (query -> ranked files): median 23 ms, p90 27 ms
+semantic snippets after that:    median 1449 ms

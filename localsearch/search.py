@@ -26,13 +26,19 @@ class Hit:
     cid: int = -1                 # winning chunk id (deep mode) -> vec reconstruct
     pscore: float = None          # personalized score (set by Personalizer.rerank)
     personal: bool = False        # True if history boosted this hit
+    page: int = None              # page/slide of the winning chunk (paged formats)
+    sim: float = None             # raw query-chunk cosine (absolute relevance signal)
 
 
-def _minmax(pairs):
+def _minmax(pairs, floor=None):
+    """Min-max normalize; `floor` lowers the minimum (BM25: chunks that were not
+    returned score 0, and rank_bm25 used to return them as zero-score padding)."""
     if not pairs:
         return {}
     vs = [s for _, s in pairs]
     lo, hi = min(vs), max(vs)
+    if floor is not None:
+        lo = min(lo, floor)
     rng = (hi - lo) or 1.0
     return {cid: (s - lo) / rng for cid, s in pairs}
 
@@ -41,15 +47,66 @@ def _split_sentences(text):
     return [s.strip() for s in _SENT_SPLIT.split(text) if s and s.strip()]
 
 
+class VecCache:
+    """Small thread-safe LRU of text -> embedding (sentences, queries): refining
+    a query re-ranks mostly the same files, so their sentences are reused."""
+
+    def __init__(self, cap=20000):
+        import threading
+        from collections import OrderedDict
+        self.cap, self._d, self._lock = cap, OrderedDict(), threading.Lock()
+
+    def get_many(self, keys):
+        with self._lock:
+            out = []
+            for k in keys:
+                v = self._d.get(k)
+                if v is not None:
+                    self._d.move_to_end(k)
+                out.append(v)
+            return out
+
+    def put_many(self, keys, vecs):
+        with self._lock:
+            for k, v in zip(keys, vecs):
+                self._d[k] = v
+                self._d.move_to_end(k)
+            while len(self._d) > self.cap:
+                self._d.popitem(last=False)
+
+
+def _cut(best, local, max_chars):
+    snip = best[:max_chars] + ("…" if len(best) > max_chars else "")
+    return ("…" + snip) if local > 0 else snip
+
+
+def lexical_snippet(chunk_text, qtokens, max_chars=260, max_sents=16):
+    """Instant, model-free snippet: the sentence sharing the most query terms
+    (the chunk's first sentence when nothing overlaps). Shown while the
+    semantic snippet is computed."""
+    sents = _split_sentences(chunk_text)[:max_sents]
+    if not sents:
+        return _cut(chunk_text, 0, max_chars)
+    q = set(qtokens or ())
+    best_i, best_n = 0, 0
+    if q:
+        for i, s in enumerate(sents):
+            n = len(q.intersection(tokenize(s)))
+            if n > best_n:
+                best_i, best_n = i, n
+    return _cut(sents[best_i], best_i, max_chars)
+
+
 def make_snippets(hits, qvec, embedder, max_chars=260,
-                  max_sent_chars=300, max_sents=16):
-    """Set each hit's snippet to its most query-relevant sentence (bounded cost)."""
+                  max_sent_chars=300, max_sents=16, cache=None):
+    """Set each hit's snippet to its most query-relevant sentence (bounded cost).
+    `cache` (VecCache) skips re-embedding sentences seen in earlier searches."""
     sent_lists = []
     for h in hits:
         sents = _split_sentences(h.chunk_text)[:max_sents]
         if len(sents) <= 1:
             best = sents[0] if sents else h.chunk_text
-            h.snippet = best[:max_chars] + ("…" if len(best) > max_chars else "")
+            h.snippet = _cut(best, 0, max_chars)
             sent_lists.append(None)
         else:
             sent_lists.append(sents)
@@ -62,30 +119,85 @@ def make_snippets(hits, qvec, embedder, max_chars=260,
             owner.append(i)
     if not flat:
         return
-    embs = embedder.embed_docs(flat)
+    if cache is not None:
+        got = cache.get_many(flat)
+        miss = [j for j, v in enumerate(got) if v is None]
+        if miss:
+            new = embedder.embed_docs([flat[j] for j in miss])
+            cache.put_many([flat[j] for j in miss], list(new))
+            for k, j in enumerate(miss):
+                got[j] = new[k]
+        embs = np.vstack(got)
+    else:
+        embs = embedder.embed_docs(flat)
     sims = embs @ qvec[0]
     best_idx = {}
     best_sim = {}
     for j, i in enumerate(owner):
         if sims[j] > best_sim.get(i, -1e9):
             best_sim[i], best_idx[i] = sims[j], j
+    first = {}
+    for j, i in enumerate(owner):
+        first.setdefault(i, j)
     for i, h in enumerate(hits):
         sents = sent_lists[i]
         if sents is None:
             continue
-        local = sum(1 for k in range(best_idx[i]) if owner[k] == i)
+        local = best_idx[i] - first[i]
         best = sents[local] if local < len(sents) else sents[0]
-        snip = best[:max_chars] + ("…" if len(best) > max_chars else "")
-        if local > 0:
-            snip = "…" + snip
-        h.snippet = snip
+        h.snippet = _cut(best, local, max_chars)
 
 
-def retrieve(index, qvec, qtokens, top_k, alpha, fetch):
-    """Hybrid retrieval -> top_k files with best chunk; call under the lock."""
-    dense = index.search_dense(qvec, fetch)
-    bm25 = index.search_bm25(qtokens, fetch)
-    dn, bn = _minmax(dense), _minmax(bm25)
+_CJK_CH = re.compile(r"[぀-ヿ㐀-䶿一-鿿가-힯]")
+
+
+def text_lang(text):
+    """'cjk' or 'latin' by script share -- enough to tell the two groups apart."""
+    t = re.sub(r"\s+", "", text[:400])
+    return "cjk" if t and len(_CJK_CH.findall(t)) / len(t) > 0.3 else "latin"
+
+
+def lang_balance(dense, index, qlang, strength, k=10, info=None):
+    """Multilingual embedders score same-language text higher across the board
+    ("language bias"), so a Chinese query buries the English document it is
+    about. Shift the other-language group up by the gap between the two groups'
+    top-k mean similarity (times `strength`) before fusion."""
+    if not dense or strength <= 0:
+        return dense
+    groups = {}
+    for cid, s in dense:
+        meta = index.chunk_meta.get(cid)
+        if meta is not None:
+            groups.setdefault(text_lang(meta["text"]) == qlang, []).append(s)
+    if True not in groups or False not in groups:
+        return dense
+    top = lambda xs: sum(sorted(xs, reverse=True)[:k]) / min(k, len(xs))
+    shift = strength * (top(groups[True]) - top(groups[False]))
+    if shift <= 0:
+        return dense
+    if info is not None:
+        info.update(shift=shift, qlang=qlang)
+    out = []
+    for cid, s in dense:
+        meta = index.chunk_meta.get(cid)
+        same = meta is None or text_lang(meta["text"]) == qlang
+        out.append((cid, s if same else s + shift))
+    return sorted(out, key=lambda x: -x[1])
+
+
+def retrieve(index, qvec, qtokens, top_k, alpha, fetch, allowed=None,
+             query_text=None, balance=0.0, info=None):
+    """Hybrid retrieval -> top_k files with best chunk; call under the lock.
+    `allowed`: optional int64 array of chunk ids (query filters); `info`
+    (dict) receives the language-balance shift, if one was applied."""
+    dense = index.search_dense(qvec, fetch, allowed)
+    if balance and query_text:
+        dense = lang_balance(dense, index, text_lang(query_text), balance, info=info)
+    bm25 = index.search_bm25(qtokens, fetch, allowed)
+    # fewer matches than `fetch`: the unreturned chunks score 0, so normalize
+    # against 0 -- exactly what the zero-padded rank_bm25 top-k used to give
+    dn = _minmax(dense)
+    bn = _minmax(bm25, floor=0.0 if len(bm25) < fetch else None)
     fused = {}
     for cid in set(dn) | set(bn):
         fused[cid] = alpha * dn.get(cid, 0.0) + (1 - alpha) * bn.get(cid, 0.0)
@@ -98,7 +210,7 @@ def retrieve(index, qvec, qtokens, top_k, alpha, fetch):
         p = meta["path"]
         if p not in best_per_file:
             best_per_file[p] = Hit(p, sc, meta["text"], meta["start"], meta["end"],
-                                   terms=qtokens, cid=cid)
+                                   terms=qtokens, cid=cid, page=meta.get("page"))
         if len(best_per_file) >= top_k:
             break
     return list(best_per_file.values())
