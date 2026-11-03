@@ -7,7 +7,9 @@ sentence-transformers>=2.6
 faiss-cpu>=1.7
 numpy>=1.24
 tqdm>=4.66
-pymupdf>=1.24          # PDF text extraction
+pymupdf>=1.24          # PDF text extraction (+ rendering scanned pages for OCR)
+olefile>=0.46          # legacy .doc/.ppt (and WPS .wps/.dps) containers
+xlrd>=2.0              # legacy .xls (and WPS .et)
 python-docx>=1.1       # demos only (builds sample .docx); the parser uses the stdlib
 watchdog>=4.0          # live folder watching (Control mode)
 pywin32>=306 ; sys_platform == "win32"   # Windows Search content index (instant mode)

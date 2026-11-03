@@ -44,7 +44,7 @@ A real semantic engine, not a keyword matcher with a marketing label — and its
 | 🔁 **~35 s** to index 100k files on a GPU, **~0.1 s** to re‑scan | incremental diff measured **235× faster** than a full scan; ~20 chunks/s on a 4‑core CPU |
 | 🎯 matches paraphrases with **zero shared words** | exact FAISS + BM25 hybrid, fp16 — half the RAM/disk |
 | 🔒 **0 bytes** leave your machine | fully offline · binds `127.0.0.1` · no account, no telemetry |
-| 📄 **10 formats** (txt·md·pdf·docx·xlsx·pptx·csv·html·rtf) · no Docker | single `.exe` · optional add‑on packs (DLC) |
+| 📄 **21 formats** — Office old & new, **WPS**, **OFD e‑invoices**, PDF (scanned pages too, with OCR), EPUB, ODF, e‑mail | single `.exe` · optional add‑on packs (DLC) |
 | 🖼️ **Reads images too** — opt‑in OCR | screenshots / scans / photos searchable **by meaning** · Windows built‑in engine · **no model download** |
 
 <sub>CPU figures measured with the shipped model on a 4‑core 2.1 GHz CPU, no GPU: results in ~15–35 ms at 100k chunks; the semantic snippets for 20 results follow in ~0.4–1.2 s. Indexing speed is the one place a GPU matters.</sub>

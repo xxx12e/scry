@@ -164,8 +164,18 @@ class SearchEngine:
         return h.hexdigest()
 
     def _fmeta(self, path, mtime, size):
-        return dict(mtime=mtime, size=size,
-                    hash=self._hash(path) if self.cfg.change_detection == "hash" else None)
+        m = dict(mtime=mtime, size=size,
+                 hash=self._hash(path) if self.cfg.change_detection == "hash" else None)
+        if parser._ocr_active():
+            m["ocr"] = True               # parsed with OCR available (scanned PDFs)
+        return m
+
+    def _needs_ocr_retry(self, path, old):
+        """A PDF that yielded no text before OCR was turned on is re-read once
+        OCR is on (its mtime never changes, so the diff alone would skip it)."""
+        return (parser._ocr_active() and not old.get("ocr")
+                and path.lower().endswith(".pdf")
+                and not self.index.file_chunks.get(path))
 
     def _unchanged(self, old, path, mtime, size):
         if self.cfg.change_detection == "hash":
@@ -340,7 +350,8 @@ class SearchEngine:
                     else:
                         cloud_skipped += 1
                     continue
-                if old is not None and self._unchanged(old, path, mtime, size):
+                if (old is not None and self._unchanged(old, path, mtime, size)
+                        and not self._needs_ocr_retry(path, old)):
                     skipped += 1
                 else:
                     todo.append((path, mtime, size, old is not None))

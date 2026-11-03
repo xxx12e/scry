@@ -41,8 +41,10 @@ class Config:
                                       # less relevant than it by more than this share
                                       # of the candidates' score range
 
-    supported_ext: tuple = (".txt", ".md", ".pdf", ".docx", ".xlsx", ".pptx",
-                            ".csv", ".html", ".htm", ".rtf")
+    supported_ext: tuple = (".txt", ".md", ".pdf", ".docx", ".xlsx", ".pptx",   # informational:
+                            ".csv", ".html", ".htm", ".rtf", ".ofd", ".doc",     # parser.SUPPORTED
+                            ".xls", ".ppt", ".wps", ".et", ".dps", ".epub",      # is authoritative
+                            ".odt", ".ods", ".odp", ".eml")
     ocr: bool = False                 # opt-in image OCR (Windows built-in engine)
     index_cloud_files: bool = False   # read cloud-only placeholders (makes OneDrive etc.
                                       # DOWNLOAD them) -- off: they are skipped

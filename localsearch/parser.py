@@ -5,7 +5,11 @@ import codecs
 import io
 import locale
 import logging
+import os
+import posixpath
 import re
+import struct
+import tempfile
 import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
@@ -14,6 +18,11 @@ from xml.etree import ElementTree as ET
 from . import ocr as _ocr
 
 log = logging.getLogger("localsearch.parser")
+
+# Page/slide boundary marker. Parsers that know pages join them with PAGE; the
+# engine maps each chunk to its page by counting markers before it (str.strip
+# and the tokenizer both treat \f as whitespace, so it never reaches the index).
+PAGE = "\n\f\n"
 
 _OCR_ON = False
 
@@ -131,12 +140,41 @@ def _parse_md(path):
     return t
 
 
+_OCR_PDF_MAX_PAGES = 100        # bound the cost of one scanned book
+_OCR_DPI = 200
+
+
+def _ocr_pdf_page(page):
+    """Render one image-only PDF page and read it with the Windows OCR engine."""
+    pix = page.get_pixmap(dpi=_OCR_DPI)
+    fd, tmp = tempfile.mkstemp(suffix=".png")
+    os.close(fd)
+    try:
+        pix.save(tmp)
+        return _ocr.ocr_image(tmp) or ""
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def _parse_pdf(path):
+    """Text layer per page; with OCR on, pages that are just a scan (no text,
+    but images) are rendered and recognized -- scanned contracts, receipts..."""
     if fitz is None:
         raise RuntimeError("PyMuPDF (fitz) not installed")
     doc = fitz.open(path)
     try:
-        return "\n".join(page.get_text() for page in doc)
+        pages, ocred = [], 0
+        for page in doc:
+            text = page.get_text()
+            if (_OCR_ON and len(text.strip()) < 25 and ocred < _OCR_PDF_MAX_PAGES
+                    and page.get_images()):
+                ocred += 1
+                text = _ocr_pdf_page(page) or text
+            pages.append(text)
+        return PAGE.join(pages)
     finally:
         doc.close()
 
@@ -207,7 +245,21 @@ def _parse_xlsx(path):
 
 
 def _parse_pptx(path):
-    return _ooxml_text(path, [r"ppt/slides/slide\d.*\.xml$", r"ppt/notesSlides/.*\.xml$"])
+    """One page per slide (in slide order); speaker notes after the slides."""
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+        slides = sorted((n for n in names if re.match(r"ppt/slides/slide\d+\.xml$", n)),
+                        key=_natural_key)
+        pages = []
+        for n in slides:
+            lines = []
+            try:
+                _ooxml_part_lines(z.read(n), lines)
+            except ET.ParseError:
+                pass
+            pages.append("\n".join(lines))
+    notes = _ooxml_text(path, [r"ppt/notesSlides/.*\.xml$"])
+    return PAGE.join(pages) + ("\n" + notes if notes else "")
 
 
 # ---- HTML ----------------------------------------------------------------
@@ -377,9 +429,22 @@ def _parse_rtf(path):
     return rtf_to_text(Path(path).read_bytes().decode("latin-1"))
 
 
+from .formats import (parse_ofd as _parse_ofd, parse_doc as _parse_doc,  # noqa: E402
+                      parse_xls as _parse_xls, parse_ppt as _parse_ppt,
+                      parse_epub as _parse_epub, parse_odf as _parse_odf,
+                      parse_eml as _parse_eml)
+
 _PARSERS = {".txt": _read_text, ".md": _parse_md, ".pdf": _parse_pdf, ".docx": _parse_docx,
             ".xlsx": _parse_xlsx, ".pptx": _parse_pptx, ".csv": _read_text,
-            ".html": _parse_html, ".htm": _parse_html, ".rtf": _parse_rtf}
+            ".html": _parse_html, ".htm": _parse_html, ".rtf": _parse_rtf,
+            # China: e-invoices / official documents (GB/T 33190)
+            ".ofd": _parse_ofd,
+            # legacy binary Office -- and WPS Office's own formats (best effort:
+            # they are parsed as their Word/Excel/PowerPoint counterparts)
+            ".doc": _parse_doc, ".xls": _parse_xls, ".ppt": _parse_ppt,
+            ".wps": _parse_doc, ".et": _parse_xls, ".dps": _parse_ppt,
+            ".epub": _parse_epub, ".odt": _parse_odf, ".ods": _parse_odf, ".odp": _parse_odf,
+            ".eml": _parse_eml}
 
 SUPPORTED = tuple(_PARSERS.keys())
 
