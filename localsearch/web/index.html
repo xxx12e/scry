@@ -197,6 +197,10 @@ const I18N = {
     st_disconnected:"无法连接后端",
     bn_cancelled:"已取消建库。", bn_skipped:"已跳过 {n} 个无法读取的文件（其余正常索引）。",
     bn_cloud:"已跳过 {n} 个仅在云端的文件（没有读取，避免触发 OneDrive 等下载它们）。",
+    cv_head:"读不了的文件：", cv_sep:"；", cv_join:"、", cv_img:"图片 {n} 张（开启「识别图片文字」后可按内容搜到）",
+    cv_pdf_off:"{n} 个 PDF 没有文字层（多为扫描件，开启「识别图片文字」后重新扫描即可）",
+    cv_pdf_on:"{n} 个 PDF 没读出文字（扫描质量太差、加密或损坏）",
+    cv_failed:"{list}（可能加密、损坏或格式异常）", cv_unsup:"{list} 暂不支持",
     st_searching:"搜索中…", st_search_wait:"AI 模型首次加载中（约 10-20 秒），随后自动出结果…",
     em_none:"没有找到结果。",
     em_tip_instant:" 「全盘语义」靠 Windows 索引找候选，纯改写 / 跨语言（零字面重合）可能召不回——想按纯意思搜，请把该文件夹加进「深度语义」（掌控模式）再搜。",
@@ -273,6 +277,10 @@ const I18N = {
     st_disconnected:"Cannot reach the backend",
     bn_cancelled:"Indexing cancelled. ", bn_skipped:"Skipped {n} unreadable file(s); the rest were indexed.",
     bn_cloud:"Skipped {n} cloud-only files (not read, so OneDrive etc. won't download them).",
+    cv_head:"Couldn't read: ", cv_sep:"; ", cv_join:", ", cv_img:"{n} images (turn on image OCR to search them by content)",
+    cv_pdf_off:"{n} PDFs without a text layer (mostly scans; turn on image OCR and rescan)",
+    cv_pdf_on:"{n} PDFs with no readable text (poor scan, encrypted or damaged)",
+    cv_failed:"{list} (maybe encrypted, damaged or malformed)", cv_unsup:"{list} not supported yet",
     st_searching:"Searching…", st_search_wait:"Loading the AI model (~10-20s), results will appear automatically…",
     em_none:"No results.",
     em_tip_instant:" Whole-disk Semantic finds candidates via the Windows index, so a pure paraphrase / cross-language query (zero shared words) may miss — add that folder to Deep Semantic (Control mode) to search by meaning only.",
@@ -550,11 +558,13 @@ async function poll(){
       document.getElementById('status').textContent=
         t('st_ready', {files:s.files, chunks:s.chunks, model, folders});
       const lb=s.last_build;
-      if(lb && (lb.failed>0 || lb.cancelled || lb.cloud_skipped>0)){
+      const cov = coverageText(lb);
+      if(lb && (lb.failed>0 || lb.cancelled || lb.cloud_skipped>0 || cov)){
         note.style.display='block';
         note.textContent = (lb.cancelled? t('bn_cancelled') : '')
           + (lb.failed>0? t('bn_skipped', {n:lb.failed}) : '')
-          + (lb.cloud_skipped>0? ' '+t('bn_cloud', {n:lb.cloud_skipped}) : '');
+          + (lb.cloud_skipped>0? ' '+t('bn_cloud', {n:lb.cloud_skipped}) : '')
+          + (cov? ' '+cov : '');
       } else { note.style.display='none'; }
     }
   }catch(e){ document.getElementById('status').textContent=t('st_disconnected'); }
@@ -670,6 +680,20 @@ async function doSearch(){
   if(r.snip_id) upgradeSnippets(r.snip_id, my);
 }
 let LAST_RESP = null;
+// "what could not be read" -- so missing formats are visible, not silent
+const IMG_EXT = ['.png','.jpg','.jpeg','.bmp','.tif','.tiff','.gif','.webp'];
+function coverageText(lb){
+  if(!lb) return '';
+  const parts = [], uns = Object.assign({}, lb.unsupported||{}), fb = Object.assign({}, lb.failed_by||{});
+  let img = 0; IMG_EXT.forEach(e=>{ if(uns[e]){ img += uns[e]; delete uns[e]; } });
+  if(img) parts.push(t('cv_img', {n:img}));
+  if(fb['.pdf']){ parts.push(t(lb.ocr? 'cv_pdf_on':'cv_pdf_off', {n:fb['.pdf']})); delete fb['.pdf']; }
+  const fl = Object.entries(fb).map(([e,n])=>e+' ×'+n).join(t('cv_join'));
+  if(fl) parts.push(t('cv_failed', {list:fl}));
+  const ul = Object.entries(uns).map(([e,n])=>e+' ×'+n).join(t('cv_join'));
+  if(ul) parts.push(t('cv_unsup', {list:ul}));
+  return parts.length? t('cv_head') + parts.join(t('cv_sep')) : '';
+}
 async function findSimilar(path){
   const box=document.getElementById('results'); const err=document.getElementById('searchErr');
   const my = ++SEQ; SEL=-1; err.textContent='';

@@ -213,10 +213,13 @@ class SearchEngine:
     def _cloud_skip(self, st):
         return not self.cfg.index_cloud_files and cloud_only(st)
 
-    def _walk(self, root):
+    def _walk(self, root, unread=None):
         """scandir walk yielding (path, mtime, size, cloud_only); prunes system/
-        junk dirs."""
+        junk dirs. `unread` (Counter) tallies document-like files we skip --
+        unsupported types, and images while OCR is off -- by extension."""
         exts = tuple(e.lower() for e in parser.current_exts())
+        skipped_kinds = parser.UNREAD_DOCLIKE | (frozenset() if parser._ocr_active()
+                                                 else frozenset(ocr.IMAGE_EXT))
         max_bytes = self.cfg.max_file_mb * 1e6
         stack = [str(root)]
         while stack:
@@ -235,7 +238,10 @@ class SearchEngine:
                                 stack.append(entry.path)
                             continue
                         dot = name.rfind(".")
-                        if dot < 0 or name[dot:].lower() not in exts:
+                        ext = name[dot:].lower() if dot >= 0 else ""
+                        if ext not in exts:
+                            if unread is not None and ext in skipped_kinds:
+                                unread[ext] += 1
                             continue
 
 
@@ -320,12 +326,13 @@ class SearchEngine:
         """Incremental scan/parse/embed/index; cancellable, searches stay live."""
         dirs = [str(Path(d).resolve()) for d in dirs]
         _ = self.embedder
-        current, cloud = {}, set()
+        from collections import Counter
+        current, cloud, unread, failed_by = {}, set(), Counter(), Counter()
         for d in dirs:
             if not os.path.isdir(d):
                 log.warning("not a directory, skipping: %s", d)
                 continue
-            for p, mtime, size, is_cloud in self._walk(d):
+            for p, mtime, size, is_cloud in self._walk(d, unread):
                 current[p] = (mtime, size)
                 if is_cloud:
                     cloud.add(p)
@@ -416,10 +423,19 @@ class SearchEngine:
                     self._schedule_save()
         # else: a no-op diff (e.g. the startup catch-up scan) touches nothing on disk
         stats = dict(added=added, updated=updated, removed=removed, skipped=skipped,
-                     failed=failed, cancelled=bool(cancelled), cloud_skipped=cloud_skipped)
+                     failed=failed, cancelled=bool(cancelled), cloud_skipped=cloud_skipped,
+                     # coverage report: what could not be read, by extension
+                     unsupported=dict(unread.most_common(12)),
+                     failed_by=dict(failed_by.most_common(12)),
+                     ocr=parser._ocr_active())
         with self._lock:
             n_files = len(self.index.file_chunks) if self.index else 0
             n_chunks = len(self.index.chunk_meta) if self.index else 0
+            if self.index is not None:     # every indexed file that yielded no text
+                for p, cids in self.index.file_chunks.items():
+                    if not cids and _under_any(p, dirs):
+                        failed_by[os.path.splitext(p)[1].lower() or "?"] += 1
+        stats["failed_by"] = dict(failed_by.most_common(12))
         log.info("build done: %s | total %d files / %d chunks", stats, n_files, n_chunks)
         return stats
 

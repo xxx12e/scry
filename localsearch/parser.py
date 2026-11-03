@@ -444,7 +444,17 @@ _PARSERS = {".txt": _read_text, ".md": _parse_md, ".pdf": _parse_pdf, ".docx": _
             ".doc": _parse_doc, ".xls": _parse_xls, ".ppt": _parse_ppt,
             ".wps": _parse_doc, ".et": _parse_xls, ".dps": _parse_ppt,
             ".epub": _parse_epub, ".odt": _parse_odf, ".ods": _parse_odf, ".odp": _parse_odf,
-            ".eml": _parse_eml}
+            ".eml": _parse_eml,
+            # macro-enabled documents and templates are the same OOXML packages
+            ".docm": _parse_docx, ".dotx": _parse_docx, ".dotm": _parse_docx,
+            ".xlsm": _parse_xlsx, ".xltx": _parse_xlsx, ".xltm": _parse_xlsx,
+            ".pptm": _parse_pptx, ".potx": _parse_pptx, ".potm": _parse_pptx}
+
+# Document-like files we cannot read yet: counted (never opened) so the UI can
+# say what is missing instead of silently ignoring it.
+UNREAD_DOCLIKE = frozenset((
+    ".caj .kdh .nh .pages .numbers .key .mobi .azw .azw3 .djvu .chm .xps .oxps "
+    ".pst .ost .msg .one .vsd .vsdx .mpp .zip .rar .7z .tex .hwp").split())
 
 SUPPORTED = tuple(_PARSERS.keys())
 
