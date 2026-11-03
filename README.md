@@ -37,17 +37,17 @@ A real semantic engine, not a keyword matcher with a marketing label — and its
 
 | | |
 |---|---|
-| ⚡ **~8 ms** to semantically search **100,000 files** | comfortably interactive; the model is tiny, not an LLM |
+| ⚡ **~15–35 ms** to results over **100,000 chunks — on a plain 4‑core CPU** | query embed 5–21 ms + exact FAISS 6 ms + BM25 0.3 ms; the best‑sentence snippets stream in right after |
 | 🌐 **~0.1 s** whole‑disk semantic results | **zero pre‑indexing** — rides the OS content index |
 | 🪶 **118M params · 235 MB** multilingual model | vs the **4–8 GB** local LLMs other "AI search" tools ship |
 | 🌍 **100+ languages · cross‑language** | search 中文 → find English files: measured **1/10 → 10/10** vs an English‑only model |
-| 🔁 **~35 s** to index 100k files, **~0.1 s** to re‑scan | incremental diff measured **235× faster** than a full scan |
+| 🔁 **~35 s** to index 100k files on a GPU, **~0.1 s** to re‑scan | incremental diff measured **235× faster** than a full scan; ~20 chunks/s on a 4‑core CPU |
 | 🎯 matches paraphrases with **zero shared words** | exact FAISS + BM25 hybrid, fp16 — half the RAM/disk |
 | 🔒 **0 bytes** leave your machine | fully offline · binds `127.0.0.1` · no account, no telemetry |
 | 📄 **10 formats** (txt·md·pdf·docx·xlsx·pptx·csv·html·rtf) · no Docker | single `.exe` · optional add‑on packs (DLC) |
 | 🖼️ **Reads images too** — opt‑in OCR | screenshots / scans / photos searchable **by meaning** · Windows built‑in engine · **no model download** |
 
-<sub>Speeds measured on a modern GPU (embedding) + FAISS; CPU stays well under the 100 ms interactive bar.</sub>
+<sub>CPU figures measured with the shipped model on a 4‑core 2.1 GHz CPU, no GPU: results in ~15–35 ms at 100k chunks; the semantic snippets for 20 results follow in ~0.4–1.2 s. Indexing speed is the one place a GPU matters.</sub>
 
 ## Three ways to search, one box
 
@@ -58,6 +58,10 @@ A real semantic engine, not a keyword matcher with a marketing label — and its
 | 🎯 **Deep Semantic (Control Mode)** | Point it at folders (or a whole drive) and it builds its *own* deep index — the highest quality, catches paraphrases with **zero word overlap**. First scan is full; after that it only touches what changed, and keeps itself up to date in the background. | One click per folder. |
 
 > **New here? Pick the right mode for your first try.** *Whole‑disk Semantic* is instant and needs zero setup, but it draws its candidates from the Windows index — so a **pure paraphrase or cross‑language query with no shared words** (exactly the "wow" demo) can come up empty there. For that, use **Deep Semantic**: add the folder once, let it index, and it matches *meaning* even when nothing overlaps. Rule of thumb — **Whole‑disk = broad & instant; Deep = deepest meaning.**
+
+**Filters, in plain words.** Add `type:pdf`, `time:上周` / `time:lastweek`, `in:合同`, `after:2024-03` to any search — or *only* filters, e.g. `time:上周 type:pdf`, to list last week's PDFs newest‑first. Filters are applied *inside* retrieval, so a narrow filter never starves the results. A time word in your sentence ("去年的工作总结") is **not** silently applied — that summary was probably written this year — Scry offers it as a one‑click filter instead.
+
+**Find similar.** Every result has a *Find similar* button: Scry uses that file's own meaning as the query and lists the closest other files in your deep index — even ones that share no words with it.
 
 Plus: **bilingual UI (中文 / English, one‑click toggle)**, keyboard‑driven (`Enter` to search, `↑/↓` to move, `Enter` to open), live‑highlighted snippets that show *why* a file matched, and a portable build that runs on any Windows PC with **no Python install**.
 
