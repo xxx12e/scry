@@ -196,6 +196,7 @@ const I18N = {
     st_model:"模型 {name}", st_model_loading:"AI 模型加载中（首次约 10-20 秒）…",
     st_disconnected:"无法连接后端",
     bn_cancelled:"已取消建库。", bn_skipped:"已跳过 {n} 个无法读取的文件（其余正常索引）。",
+    bn_cloud:"已跳过 {n} 个仅在云端的文件（没有读取，避免触发 OneDrive 等下载它们）。",
     st_searching:"搜索中…", st_search_wait:"AI 模型首次加载中（约 10-20 秒），随后自动出结果…",
     em_none:"没有找到结果。",
     em_tip_instant:" 「全盘语义」靠 Windows 索引找候选，纯改写 / 跨语言（零字面重合）可能召不回——想按纯意思搜，请把该文件夹加进「深度语义」（掌控模式）再搜。",
@@ -271,6 +272,7 @@ const I18N = {
     st_model:"model {name}", st_model_loading:"loading AI model (first time ~10-20s)…",
     st_disconnected:"Cannot reach the backend",
     bn_cancelled:"Indexing cancelled. ", bn_skipped:"Skipped {n} unreadable file(s); the rest were indexed.",
+    bn_cloud:"Skipped {n} cloud-only files (not read, so OneDrive etc. won't download them).",
     st_searching:"Searching…", st_search_wait:"Loading the AI model (~10-20s), results will appear automatically…",
     em_none:"No results.",
     em_tip_instant:" Whole-disk Semantic finds candidates via the Windows index, so a pure paraphrase / cross-language query (zero shared words) may miss — add that folder to Deep Semantic (Control mode) to search by meaning only.",
@@ -548,10 +550,11 @@ async function poll(){
       document.getElementById('status').textContent=
         t('st_ready', {files:s.files, chunks:s.chunks, model, folders});
       const lb=s.last_build;
-      if(lb && (lb.failed>0 || lb.cancelled)){
+      if(lb && (lb.failed>0 || lb.cancelled || lb.cloud_skipped>0)){
         note.style.display='block';
         note.textContent = (lb.cancelled? t('bn_cancelled') : '')
-          + (lb.failed>0? t('bn_skipped', {n:lb.failed}) : '');
+          + (lb.failed>0? t('bn_skipped', {n:lb.failed}) : '')
+          + (lb.cloud_skipped>0? ' '+t('bn_cloud', {n:lb.cloud_skipped}) : '');
       } else { note.style.display='none'; }
     }
   }catch(e){ document.getElementById('status').textContent=t('st_disconnected'); }

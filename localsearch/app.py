@@ -172,6 +172,8 @@ def create_app(index_dir, config=None):
     state = AppState(engine, index_dir)
     if state.settings.get("ocr"):
         engine.set_ocr(True)             # restore the persisted image-OCR choice
+    if state.settings.get("index_cloud_files"):
+        engine.cfg.index_cloud_files = True   # advanced: allow downloading placeholders
     state.resume_watch()
 
     def _warm():

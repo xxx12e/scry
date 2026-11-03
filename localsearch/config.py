@@ -44,6 +44,8 @@ class Config:
     supported_ext: tuple = (".txt", ".md", ".pdf", ".docx", ".xlsx", ".pptx",
                             ".csv", ".html", ".htm", ".rtf")
     ocr: bool = False                 # opt-in image OCR (Windows built-in engine)
+    index_cloud_files: bool = False   # read cloud-only placeholders (makes OneDrive etc.
+                                      # DOWNLOAD them) -- off: they are skipped
     change_detection: str = "mtime_size"
     max_file_mb: float = 50.0
 

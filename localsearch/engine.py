@@ -24,6 +24,20 @@ from . import dlc
 
 log = logging.getLogger("localsearch")
 
+# Windows cloud-file placeholders (OneDrive Files On-Demand, iCloud, Dropbox...):
+# reading their CONTENT makes the sync client download them -- with Desktop/
+# Documents in OneDrive by default on Windows 11, one scan could pull down the
+# whole cloud drive. stat() reads only the directory entry, so checking is free.
+_FA_OFFLINE = 0x00001000
+_FA_RECALL_ON_OPEN = 0x00040000
+_FA_RECALL_ON_DATA_ACCESS = 0x00400000
+_CLOUD_ONLY = _FA_OFFLINE | _FA_RECALL_ON_OPEN | _FA_RECALL_ON_DATA_ACCESS
+
+
+def cloud_only(st):
+    """True if this stat result is a placeholder whose content is not on disk."""
+    return bool(getattr(st, "st_file_attributes", 0) & _CLOUD_ONLY)
+
 
 def _setup_logging(index_dir):
     if any(isinstance(h, logging.FileHandler) for h in log.handlers):
@@ -186,8 +200,12 @@ class SearchEngine:
         parts = full[len(best) + 1:].split(os.sep)[:-1]     # dirs below the root
         return any(self._excluded_dir(d) for d in parts if d)
 
+    def _cloud_skip(self, st):
+        return not self.cfg.index_cloud_files and cloud_only(st)
+
     def _walk(self, root):
-        """scandir walk yielding (path, mtime, size); prunes system/junk dirs."""
+        """scandir walk yielding (path, mtime, size, cloud_only); prunes system/
+        junk dirs."""
         exts = tuple(e.lower() for e in parser.current_exts())
         max_bytes = self.cfg.max_file_mb * 1e6
         stack = [str(root)]
@@ -215,7 +233,7 @@ class SearchEngine:
                         if st.st_size > max_bytes:
                             log.info("skip oversized file: %s", entry.path)
                             continue
-                        yield entry.path, st.st_mtime, st.st_size
+                        yield entry.path, st.st_mtime, st.st_size, self._cloud_skip(st)
                     except OSError as e:
                         log.warning("scan entry failed: %s", e)
 
@@ -292,13 +310,15 @@ class SearchEngine:
         """Incremental scan/parse/embed/index; cancellable, searches stay live."""
         dirs = [str(Path(d).resolve()) for d in dirs]
         _ = self.embedder
-        current = {}
+        current, cloud = {}, set()
         for d in dirs:
             if not os.path.isdir(d):
                 log.warning("not a directory, skipping: %s", d)
                 continue
-            for p, mtime, size in self._walk(d):
+            for p, mtime, size, is_cloud in self._walk(d):
                 current[p] = (mtime, size)
+                if is_cloud:
+                    cloud.add(p)
 
 
         with self._lock:
@@ -309,9 +329,17 @@ class SearchEngine:
                 if p not in current:
                     deleted.append(p)
                     removed += 1
-            todo, skipped = [], 0
+            todo, skipped, cloud_skipped = [], 0, 0
             for path, (mtime, size) in current.items():
                 old = self.index.file_meta.get(path)
+                if path in cloud:
+                    # never read (= download) it; an entry indexed while it was
+                    # local stays valid -- "free up space" doesn't change content
+                    if old is not None:
+                        skipped += 1
+                    else:
+                        cloud_skipped += 1
+                    continue
                 if old is not None and self._unchanged(old, path, mtime, size):
                     skipped += 1
                 else:
@@ -319,7 +347,7 @@ class SearchEngine:
             self.index.remove_files(deleted)
 
         added = updated = failed = cancelled = 0
-        total = len(current)
+        total = len(current) - cloud_skipped
         done = skipped
         batch, batch_chunks = [], 0
         existed_of = {}
@@ -377,7 +405,7 @@ class SearchEngine:
                     self._schedule_save()
         # else: a no-op diff (e.g. the startup catch-up scan) touches nothing on disk
         stats = dict(added=added, updated=updated, removed=removed, skipped=skipped,
-                     failed=failed, cancelled=bool(cancelled))
+                     failed=failed, cancelled=bool(cancelled), cloud_skipped=cloud_skipped)
         with self._lock:
             n_files = len(self.index.file_chunks) if self.index else 0
             n_chunks = len(self.index.chunk_meta) if self.index else 0
@@ -393,7 +421,7 @@ class SearchEngine:
             mtime, size = st.st_mtime, st.st_size
         except OSError:
             return 0
-        if size > self.cfg.max_file_mb * 1e6:
+        if size > self.cfg.max_file_mb * 1e6 or self._cloud_skip(st):
             return 0
         with self._lock:
             self._ensure_index()
@@ -625,7 +653,8 @@ class SearchEngine:
                     vecs.append(v)
         if not vecs:
             try:
-                if os.path.getsize(path) > self.cfg.max_file_mb * 1e6:
+                st = os.stat(path)
+                if st.st_size > self.cfg.max_file_mb * 1e6 or self._cloud_skip(st):
                     return [], None
             except OSError:
                 return [], None
@@ -819,7 +848,8 @@ class SearchEngine:
             if not (low.endswith(".txt") or low.endswith(".md")):
                 continue
             try:
-                if os.path.getsize(h.path) > max_bytes:
+                st = os.stat(h.path)
+                if st.st_size > max_bytes or self._cloud_skip(st):
                     continue
                 text = Path(h.path).read_text(encoding="utf-8", errors="replace")
             except OSError:
