@@ -201,18 +201,26 @@ class DualIndex:
             self.rebuild_bm25()
 
 
-    def search_dense(self, qvec, topk):
+    def search_dense(self, qvec, topk, allowed=None):
+        """Exact top-k by inner product; `allowed` (int64 cid array) restricts the
+        search INSIDE FAISS, so a selective filter never starves the result list."""
         if self.dense.ntotal == 0:
             return []
+        if allowed is not None:
+            if not len(allowed):
+                return []
+            params = faiss.SearchParameters(sel=faiss.IDSelectorBatch(allowed))
+            D, I = self.dense.search(qvec, min(topk, len(allowed)), params=params)
+            return [(int(c), float(s)) for c, s in zip(I[0], D[0]) if c >= 0]
         D, I = self.dense.search(qvec, min(topk, self.dense.ntotal))
         return [(int(c), float(s)) for c, s in zip(I[0], D[0]) if c >= 0]
 
-    def search_bm25(self, qtokens, topk):
+    def search_bm25(self, qtokens, topk, allowed=None):
         """Best chunks containing a query term (non-matching chunks are not
         returned; search.retrieve() normalizes against a zero floor)."""
         if self._bm25 is None:
             return []
-        return self._bm25.top(qtokens, topk)
+        return self._bm25.top(qtokens, topk, allowed)
 
 
     def snapshot(self):

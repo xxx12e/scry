@@ -124,8 +124,9 @@ class BM25Index:
             return 0.0
         return float(np.mean(np.log(n_docs - df + 0.5) - np.log(df + 0.5)))
 
-    def top(self, qtokens, k):
-        """[(cid, score)] of the best `k` live chunks containing a query term."""
+    def top(self, qtokens, k, allowed=None):
+        """[(cid, score)] of the best `k` live chunks containing a query term
+        (only among `allowed` cids if given; IDF stays corpus-wide)."""
         n_docs = self.n
         if n_docs <= 0 or self.total <= 0 or not qtokens or k <= 0:
             return []
@@ -165,6 +166,11 @@ class BM25Index:
         if not all_c:
             return []
         cids, sc = np.concatenate(all_c), np.concatenate(all_s)
+        if allowed is not None:
+            keep = np.isin(cids, allowed)
+            cids, sc = cids[keep], sc[keep]
+            if not len(cids):
+                return []
         if len(all_c) > 1:
             cids, inv = np.unique(cids, return_inverse=True)
             sc = np.bincount(inv, weights=sc)

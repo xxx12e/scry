@@ -17,6 +17,7 @@ from flask import Flask, request, jsonify, Response
 from .engine import SearchEngine
 from .config import Config
 from . import resources
+from . import query as query_mod
 
 log = logging.getLogger("localsearch.app")
 HERE = Path(__file__).resolve().parent
@@ -395,43 +396,63 @@ def create_app(index_dir, config=None):
     @app.post("/api/search")
     def search():
         d = _body()
-        q = str(d.get("query") or "").strip()
+        raw = str(d.get("query") or "").strip()
         mode = d.get("mode", "semantic")
         try:
             k = min(max(int(d.get("top_k", 20)), 1), _TOP_K_MAX)
         except (TypeError, ValueError):
             k = 20
         scope = (d.get("scope") or "").strip() or None
-        if not q:
+        if not raw:
             return jsonify(results=[])
+        qf = query_mod.parse(raw)          # operators -> filters; words -> q
+        q = qf.text
+        meta = dict(filters=qf.filters, suggest=qf.suggest, unknown=qf.unknown)
+        if not q and not qf.filtered:
+            return jsonify(results=[], **meta)
         sid = None
-        if mode == "filename":
-            paths = engine.search_filename(q, limit=k, scope=scope)
+        used = mode
+        if not q:
+            # only filters ("time:上周 type:pdf"): list files instead of ranking.
+            # Whole-disk modes use Everything (instant + covers the disk) when present.
+            paths = (engine.search_filename("", limit=k, scope=scope, filters=qf)
+                     if mode != "semantic" else None)
+            if paths is not None:
+                used = "filename"
+                res = [_result(p, snippet="", score=None, terms=[]) for p in paths]
+                res.sort(key=lambda r: (r or {}).get("mtime") or "", reverse=True)
+            else:
+                used = "semantic"
+                res = [_result(h.path, snippet=h.snippet, score=None, terms=[])
+                       for h in engine.browse(qf, top_k=k)]
+        elif mode == "filename":
+            paths = engine.search_filename(q, limit=k, scope=scope, filters=qf)
             if paths is None:
                 return jsonify(results=[], code="no_everything",
-                               error="Everything (es.exe) not available.")
+                               error="Everything (es.exe) not available.", **meta)
             res = [_result(p, snippet="", score=None, terms=[]) for p in paths]
         elif mode == "instant":
             if not ws_available:
                 return jsonify(results=[], code="ws_down",
-                               error="Windows Search service is off.")
-            hits = engine.search_instant_global(q, top_k=k, scope=scope, deepen=False)
+                               error="Windows Search service is off.", **meta)
+            hits = engine.search_instant_global(q, top_k=k, scope=scope, deepen=False,
+                                                filters=qf)
             if not hits:
-                return jsonify(results=[], code="no_hits", error="No content matches.")
+                return jsonify(results=[], code="no_hits", error="No content matches.", **meta)
             sid = engine.queue_snippets("instant", q, hits) if engine.cfg.instant_deep_snippet else None
             res = [_result(h.path, snippet=h.snippet, score=round(h.score, 3),
                            terms=h.terms, personal=h.personal) for h in hits]
         else:
             # results first (~tens of ms); the semantic snippets follow via
             # /api/snippets -- they were ~95% of a CPU query's time
-            hits = engine.search_semantic(q, top_k=k, snippets="lexical")
+            hits = engine.search_semantic(q, top_k=k, snippets="lexical", filters=qf)
             sid = engine.queue_snippets("semantic", q, hits) if hits else None
             res = [_result(h.path, snippet=h.snippet or _snippet(h.chunk_text),
                            score=round(h.score, 3), terms=h.terms, personal=h.personal) for h in hits]
         res = [r for r in res if r is not None]
         state.remember_shown(r["path"] for r in res)
-        out = dict(results=res)
-        if mode != "filename" and sid:
+        out = dict(results=res, mode_used=used, **meta)
+        if sid:
             out["snip_id"] = sid
         return jsonify(**out)
 

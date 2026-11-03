@@ -536,7 +536,34 @@ class SearchEngine:
             self._q_cache.put_many([query], [v])
         return v
 
-    def search_semantic(self, query, top_k=10, snippets="semantic"):
+    def _allowed_cids(self, qf):
+        """Chunk ids of indexed files passing the query filters (under the lock)."""
+        fc = self.index.file_chunks
+        out = []
+        for p, meta in self.index.file_meta.items():
+            if qf.match(p, meta.get("mtime")):
+                out.extend(fc.get(p, ()))
+        return np.unique(np.asarray(out, np.int64))
+
+    def browse(self, qf, top_k=20):
+        """No words, only filters ("time:上周 type:pdf"): matching files of the deep
+        index, newest first, with their opening sentence as the snippet."""
+        with self._lock:
+            if self.index is None:
+                return []
+            rows = sorted(((meta.get("mtime") or 0, p) for p, meta in self.index.file_meta.items()
+                           if qf.match(p, meta.get("mtime"))), reverse=True)[:top_k]
+            hits = []
+            for _, p in rows:
+                cids = self.index.file_chunks.get(p) or []
+                meta = self.index.chunk_meta.get(cids[0]) if cids else None
+                text = meta["text"] if meta else ""
+                hits.append(Hit(p, None, text, 0, 0,
+                                snippet=lexical_snippet(text, []) if text else "",
+                                cid=cids[0] if cids else -1))
+        return hits
+
+    def search_semantic(self, query, top_k=10, snippets="semantic", filters=None):
         """Hybrid deep search. snippets="semantic" embeds each hit's sentences to
         pick the best one (~95% of a CPU query's time); "lexical" returns at once
         with a term-overlap snippet -- pair it with queue_snippets() and
@@ -551,12 +578,17 @@ class SearchEngine:
         with self._lock:
             if self.index is None or self.index.dense.ntotal == 0:
                 return []
+            allowed = None
+            if filters is not None and filters.filtered:
+                allowed = self._allowed_cids(filters)
+                if not len(allowed):
+                    return []
             if not self.index.bm25_building():
                 self.index.ensure_bm25()       # library use; the app pre-builds it
             # else: still building in the background -> dense-only for now rather
             # than stalling every search (and the status poll) on the lock
             hits = retrieve(self.index, qvec, qtokens, want,
-                            self.cfg.alpha, self.cfg.fusion_fetch)
+                            self.cfg.alpha, self.cfg.fusion_fetch, allowed)
             vecs = ({h.path: self._reconstruct(h.cid) for h in hits}
                     if self.personalizer.enabled else {})
         hits = self._personalize(hits, vecs, top_k)
@@ -600,11 +632,28 @@ class SearchEngine:
                           max_sents=self.cfg.snippet_sents_per_hit, cache=self._sent_cache)
         return {h.path: h.snippet for h in hits}
 
-    def search_filename(self, query, limit=50, scope=None):
-        q = query
+    def search_filename(self, query, limit=50, scope=None, filters=None):
+        """Everything filename search. Filters are translated to Everything's own
+        syntax (ext:, dm:, path:) AND re-checked here, so a version that reads a
+        clause differently can cost recall but never return a wrong file."""
+        parts = [query] if query else []
         if scope:
-            q = f'"{scope}" {query}'
-        return filename_search(self.cfg.es_exe, q, limit, self.cfg.es_timeout_s)
+            parts.insert(0, f'"{scope}"')
+        if filters is not None and filters.filtered:
+            import time as _t
+            if filters.exts:
+                parts.append("ext:" + ";".join(sorted(e.lstrip(".") for e in filters.exts)))
+            if filters.after is not None:
+                parts.append("dm:>=" + _t.strftime("%Y-%m-%d", _t.localtime(filters.after)))
+            if filters.before is not None:
+                parts.append("dm:<" + _t.strftime("%Y-%m-%d", _t.localtime(filters.before)))
+            parts += ['path:"%s"' % f["value"].replace('"', "") for f in filters.filters
+                      if f["kind"] == "in"]
+            limit = limit * 3
+        paths = filename_search(self.cfg.es_exe, " ".join(parts), limit, self.cfg.es_timeout_s)
+        if paths is not None and filters is not None and filters.filtered:
+            paths = [p for p in paths if filters.match(p)][:limit // 3]
+        return paths
 
     # ---- personalization (local, training-free) ----
     def _reconstruct(self, cid):
@@ -670,11 +719,15 @@ class SearchEngine:
         return texts, np.vstack(rows)
 
     def search_instant_global(self, query, top_k=20, candidates=None, scope=None,
-                              deepen=True):
+                              deepen=True, filters=None):
         """Whole-disk semantic search, no pre-indexing (Windows Search + e5 rerank)."""
         from . import winsearch
-        cands = winsearch.query(query, limit=candidates or self.cfg.instant_candidates,
-                                scope=scope, min_results=top_k)
+        limit = candidates or self.cfg.instant_candidates
+        filtered = filters is not None and filters.filtered
+        cands = winsearch.query(query, limit=limit * 3 if filtered else limit, scope=scope,
+                                min_results=top_k, exts=filters.exts if filtered else None)
+        if filtered:              # authoritative check (the SQL clause is best-effort)
+            cands = [(p, s) for p, s in cands if filters.match(p)][:limit]
         if not cands:
             return []
         qvec = self._qvec(query)

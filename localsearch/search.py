@@ -146,10 +146,11 @@ def make_snippets(hits, qvec, embedder, max_chars=260,
         h.snippet = _cut(best, local, max_chars)
 
 
-def retrieve(index, qvec, qtokens, top_k, alpha, fetch):
-    """Hybrid retrieval -> top_k files with best chunk; call under the lock."""
-    dense = index.search_dense(qvec, fetch)
-    bm25 = index.search_bm25(qtokens, fetch)
+def retrieve(index, qvec, qtokens, top_k, alpha, fetch, allowed=None):
+    """Hybrid retrieval -> top_k files with best chunk; call under the lock.
+    `allowed`: optional int64 array of chunk ids (query filters)."""
+    dense = index.search_dense(qvec, fetch, allowed)
+    bm25 = index.search_bm25(qtokens, fetch, allowed)
     # fewer matches than `fetch`: the unreturned chunks score 0, so normalize
     # against 0 -- exactly what the zero-padded rank_bm25 top-k used to give
     dn = _minmax(dense)

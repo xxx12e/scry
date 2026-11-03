@@ -69,6 +69,8 @@
   .chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:320px; }
   .chip button { border:0; background:transparent; padding:0 4px; font-size:13px; color:var(--mut); }
   .chip button:hover { color:var(--err); }
+  code { font-size:12px; background:var(--chipbg); border-radius:4px; padding:0 4px; }
+  .chip.flt { background:var(--persbg); color:var(--persfg); }
   .kbd { border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 4px;
          font-size:11px; background:var(--btn); color:var(--mut); }
 </style>
@@ -135,7 +137,9 @@
       </select>
       <button class="primary" onclick="doSearch()" data-i18n="btn_search">搜索</button>
     </div>
+    <div class="note" id="fltRow" style="margin-top:8px; display:none; align-items:center; gap:6px; flex-wrap:wrap"></div>
     <div class="note" style="margin-top:6px" data-i18n-html="kbd_hint"></div>
+    <div class="note" style="margin-top:2px" data-i18n-html="flt_hint"></div>
     <div class="note" id="persRow" style="margin-top:6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap">
       <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer">
         <input type="checkbox" id="persChk" onchange="togglePers()">
@@ -209,6 +213,11 @@ const I18N = {
     err_idx_corrupt:"检测到索引文件损坏（可能因断电/强制关机），需要重新扫描。",
     err_idx_load:"索引加载失败，需要重新扫描。",
     err_not_result:"只能打开搜索结果里的文件（请重新搜索一次）。",
+    flt_hint:'筛选：<code>type:pdf</code> · <code>time:上周</code> · <code>in:文件夹名</code> · <code>after:2024-03</code> —— 只写筛选不写内容，就按时间倒序列出文件',
+    flt_type:"类型 {value}", flt_in:"路径含「{value}」", flt_after:"{value} 之后", flt_before:"{value} 之前",
+    flt_time:"修改于 {start} ~ {end}", ttl_rmflt:"去掉这个筛选",
+    flt_suggest:"只看「{phrase}」修改的文件？（{start} ~ {end}）", flt_unknown:"没看懂的筛选（已当作普通文字）：{u}",
+    flt_routed:"只有筛选条件：已用文件名索引列出全盘符合条件的文件（最新的在前）",
     err_forbidden:"拒绝访问：只接受本机页面的请求。",
     generic_fail:"操作失败", open_fail:"无法打开",
     pers_label:"个性化", ttl_pers:"根据你打开过的文件，在本地学习你的偏好，把更相关的往前排（全程本地、从不上传、也从不训练模型）",
@@ -277,6 +286,11 @@ const I18N = {
     err_idx_corrupt:"The index files look damaged (possibly from a power loss / forced shutdown) — a rescan is needed.",
     err_idx_load:"Failed to load the index — a rescan is needed.",
     err_not_result:"Only files from search results can be opened (search again).",
+    flt_hint:'Filters: <code>type:pdf</code> · <code>time:lastweek</code> · <code>in:folder</code> · <code>after:2024-03</code> — filters with no words list matching files, newest first',
+    flt_type:"type {value}", flt_in:"path contains “{value}”", flt_after:"after {value}", flt_before:"before {value}",
+    flt_time:"modified {start} – {end}", ttl_rmflt:"Remove this filter",
+    flt_suggest:"Only files modified “{phrase}”? ({start} – {end})", flt_unknown:"Filter not understood (kept as words): {u}",
+    flt_routed:"Filters only: listed matching files from the filename index across the disk (newest first)",
     err_forbidden:"Refused: only requests from this computer's own page are accepted.",
     generic_fail:"Operation failed", open_fail:"Cannot open",
     pers_label:"Personalize", ttl_pers:"Learns your preferences locally from the files you open and ranks likelier ones higher (all on-device, never uploaded, never trains the model)",
@@ -342,6 +356,7 @@ function toggleLang(){
   loadDlc();
   poll();
   if(LAST_RESULTS !== null) renderResults(LAST_RESULTS, LAST_MODE);
+  if(LAST_RESP) renderFilters(LAST_RESP, LAST_MODE);
 }
 function setMode(m){ MODE=m;
   document.getElementById('mInstant').classList.toggle('on', m==='instant');
@@ -627,7 +642,7 @@ async function doSearch(){
   const q=document.getElementById('q').value.trim();
   const box=document.getElementById('results'); const err=document.getElementById('searchErr');
   err.textContent='';
-  if(!q){ box.innerHTML=''; LAST_RESULTS=null; return; }
+  if(!q){ box.innerHTML=''; LAST_RESULTS=null; LAST_RESP=null; renderFilters(null); return; }
   addRecent(q);
   LAST_QUERY=q; SEL=-1;
   const mode=MODE;
@@ -639,11 +654,37 @@ async function doSearch(){
   const r = await api('/api/search', {query:q, mode, top_k:k, scope});
   if(my!==SEQ) return;
   err.textContent = r.error? emsg(r) : '';
+  LAST_RESP = r; renderFilters(r, mode);
   LAST_RESULTS = r.results||[]; LAST_MODE = mode;
   if(r.snip_id) LAST_RESULTS.forEach(it=>{ it.snipPending = true; });
   renderResults(LAST_RESULTS, mode);
   if(r.snip_id) upgradeSnippets(r.snip_id, my);
 }
+let LAST_RESP = null;
+function fltLabel(f){
+  if(f.kind==='time') return t('flt_time', {start:f.start, end:f.end});
+  return t('flt_'+f.kind, {value:f.value});
+}
+function renderFilters(r, mode){
+  const row = document.getElementById('fltRow'); if(!row) return;
+  const parts = (r && r.filters || []).map(f=>
+    `<span class="chip flt" data-token="${escapeHtml(f.token)}"><span>${escapeHtml(fltLabel(f))}</span>`+
+    `<button data-act="rmflt" title="${escapeHtml(t('ttl_rmflt'))}">✕</button></span>`);
+  if(r && r.suggest) parts.push(`<button class="langbtn" style="padding:3px 10px;font-size:12px" data-op="${escapeHtml(r.suggest.op)}">`+
+    `${escapeHtml(t('flt_suggest', {phrase:r.suggest.phrase, start:r.suggest.start, end:r.suggest.end}))}</button>`);
+  if(r && (r.unknown||[]).length) parts.push(`<span class="note warn" style="margin:0">${escapeHtml(t('flt_unknown', {u:r.unknown.join(' ')}))}</span>`);
+  if(r && r.mode_used==='filename' && mode!=='filename') parts.push(`<span class="note" style="margin:0">${escapeHtml(t('flt_routed'))}</span>`);
+  row.innerHTML = parts.join(' ');
+  row.style.display = parts.length? 'flex' : 'none';
+}
+document.getElementById('fltRow').addEventListener('click', ev=>{
+  const qi = document.getElementById('q');
+  const rm = ev.target.closest('button[data-act="rmflt"]');
+  if(rm){ const tok = rm.closest('.chip').dataset.token;
+    qi.value = qi.value.split(tok).join(' ').replace(/\s+/g,' ').trim(); doSearch(); return; }
+  const sg = ev.target.closest('button[data-op]');
+  if(sg){ qi.value = (qi.value + ' ' + sg.dataset.op).trim(); doSearch(); }
+});
 // results render immediately with a quick keyword snippet; the semantic
 // "best sentence" (the slow, model-bound part) replaces it when ready
 async function upgradeSnippets(id, my){
