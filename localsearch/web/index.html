@@ -53,6 +53,7 @@
   .res .snip { font-size:13.5px; color:var(--snipfg); background:var(--soft); border-radius:6px; padding:8px 10px; transition:opacity .25s; }
   .res .snip.pending { opacity:.6; }
   .res.low { opacity:.55; }
+  .res .thumb { display:block; max-width:240px; max-height:180px; border-radius:6px; margin:6px 0; border:1px solid var(--line); }
   .lowsep { color:var(--mut); font-size:12px; margin:14px 2px 8px; border-top:1px dashed var(--line); padding-top:8px; }
   .res .acts { margin-top:8px; display:flex; gap:8px; }
   .res .acts button { padding:5px 10px; font-size:13px; }
@@ -130,6 +131,7 @@
         <button id="mInstant" class="on" onclick="setMode('instant')" data-i18n="mode_instant" data-i18n-title="ttl_instant">全盘语义</button>
         <button id="mName" onclick="setMode('filename')" data-i18n="mode_filename" data-i18n-title="ttl_filename">文件名</button>
         <button id="mSem" onclick="setMode('semantic')" data-i18n="mode_semantic" data-i18n-title="ttl_semantic">深度语义</button>
+        <button id="mImg" onclick="setMode('image')" style="display:none" data-i18n="mode_image" data-i18n-title="ttl_image">图片</button>
       </span>
       <select id="scope" data-i18n-title="ttl_scope"><option value="">全盘</option></select>
       <select id="topk" data-i18n-title="ttl_topk">
@@ -180,7 +182,8 @@ const I18N = {
     mode_instant:"全盘语义", ttl_instant:"骑 Windows 内容索引，全盘语义搜，免建索引",
     ttl_instant_off:"此电脑的 Windows 搜索服务未开启，此模式不可用",
     mode_filename:"文件名", ttl_filename:"Everything 文件名秒搜，全盘",
-    mode_semantic:"深度语义", ttl_semantic:"对已添加文件夹的深度语义索引，质量最好",
+    mode_semantic:"深度语义", mode_image:"图片", ttl_image:"用一句话描述找图片/照片（以文搜图扩展包）",
+    err_no_images:"还没有可按描述搜索的图片：装好「以文搜图」扩展包后，重新扫描一次掌控的文件夹。", ttl_semantic:"对已添加文件夹的深度语义索引，质量最好",
     scope_all:"全盘", ttl_scope:"搜索范围（全盘语义 / 文件名模式生效）",
     topk_10:"10 条", topk_20:"20 条", topk_50:"50 条", ttl_topk:"返回结果数量",
     btn_search:"搜索",
@@ -262,6 +265,8 @@ const I18N = {
     ttl_instant_off:"The Windows Search service is off on this PC, so this mode is unavailable",
     mode_filename:"Filename", ttl_filename:"Instant whole-disk filename search via Everything",
     mode_semantic:"Deep Semantic", ttl_semantic:"Deep semantic index over your added folders — best quality",
+    mode_image:"Images", ttl_image:"Find images and photos by describing them (image-search add-on)",
+    err_no_images:"No images searchable by description yet: install the image-search add-on, then rescan your folders.",
     scope_all:"All drives", ttl_scope:"Search scope (applies to Whole-disk Semantic / Filename)",
     topk_10:"10", topk_20:"20", topk_50:"50", ttl_topk:"Number of results",
     btn_search:"Search",
@@ -380,6 +385,7 @@ function setMode(m){ MODE=m;
   document.getElementById('mInstant').classList.toggle('on', m==='instant');
   document.getElementById('mName').classList.toggle('on', m==='filename');
   document.getElementById('mSem').classList.toggle('on', m==='semantic');
+  document.getElementById('mImg').classList.toggle('on', m==='image');
 }
 function notice(msg, warn){
   const n=document.getElementById('uiNote');
@@ -520,6 +526,8 @@ async function poll(){
     if(s.personalize && !PERS_PENDING){ PERS_ON = !!s.personalize.enabled;
       const pc=document.getElementById('persChk'); if(pc && pc.checked!==PERS_ON) pc.checked=PERS_ON; }
     applyOcrStatus(s.ocr);
+    const mImg = document.getElementById('mImg');
+    if(mImg) mImg.style.display = (s.images && s.images.available)? '' : 'none';
     if(DLC_PACKS.length){
       renderDlc(s.dlc, s.restart_required);
       const tag = s.dlc? (s.dlc.status+'|'+s.dlc.id) : '';
@@ -654,7 +662,8 @@ function renderResults(items, mode){
       it.size? `${escapeHtml(it.size)}`:'',
       it.mtime? escapeHtml(t('res_modified', {mtime:it.mtime})):''
     ].filter(Boolean).join('<span style="opacity:.5">·</span>');
-    const snip = it.snippet? `<div class="snip${it.snipPending?' pending':''}">${highlight(it.snippet, it.terms)}</div>`:'';
+    const snip = it.thumb? `<img class="thumb" loading="lazy" alt="" src="/api/thumb?path=${encodeURIComponent(it.path)}">`
+      : it.snippet? `<div class="snip${it.snipPending?' pending':''}">${highlight(it.snippet, it.terms)}</div>`:'';
     return `${sep}<div class="res${it.low?' low':''}" data-path="${escapeHtml(it.path)}">${score}<div class="name">${escapeHtml(it.name)}</div>
       <div class="meta">${meta}</div>
       <div class="path">${escapeHtml(it.path)}</div>${snip}

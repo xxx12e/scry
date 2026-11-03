@@ -225,7 +225,7 @@ def create_app(index_dir, config=None):
                        model_ready=state.model_ready, last_error=state.last_error,
                        last_error_detail=state.last_error_detail, index_error=engine.load_error,
                        personalize=engine.personalizer.stats(),
-                       ocr=engine.ocr_status(),
+                       ocr=engine.ocr_status(), images=engine.image_status(),
                        dlc=state.dlc, restart_required=state.restart_required)
 
     @app.post("/api/cancel_build")
@@ -435,6 +435,15 @@ def create_app(index_dir, config=None):
                 used = "semantic"
                 res = [_result(h.path, snippet=h.snippet, score=None, terms=[])
                        for h in engine.browse(qf, top_k=k)]
+        elif mode == "image":
+            hits = engine.search_images(q, top_k=k, filters=qf)
+            if not hits:
+                return jsonify(results=[], code="no_images",
+                               error="No images indexed for search by description.", **meta)
+            res = [_result(h.path, snippet="", score=round(h.score, 3), terms=[]) for h in hits]
+            for r in res:
+                if r is not None:
+                    r["thumb"] = True
         elif mode == "filename":
             paths = engine.search_filename(q, limit=k, scope=scope, filters=qf)
             if paths is None:
@@ -499,6 +508,26 @@ def create_app(index_dir, config=None):
                                    terms=[], page=h.page) for h in hits) if r is not None]
         state.remember_shown(r["path"] for r in res)
         return jsonify(results=res, snip_id=sid, similar_to=name)
+
+    @app.get("/api/thumb")
+    def thumb():
+        """Small JPEG preview of an image result (same rule as opening: only files
+        a search returned)."""
+        path = request.args.get("path", "")
+        if not path or not os.path.isfile(path) or not state.was_shown(path):
+            return Response(status=404)
+        try:
+            import io
+            from PIL import Image
+            with Image.open(path) as im:
+                im = im.convert("RGB")
+                im.thumbnail((320, 240))
+                buf = io.BytesIO()
+                im.save(buf, "JPEG", quality=80)
+            return Response(buf.getvalue(), mimetype="image/jpeg",
+                            headers={"Cache-Control": "private, max-age=300"})
+        except Exception:
+            return Response(status=415)
 
     @app.post("/api/show")
     def show():

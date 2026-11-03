@@ -28,4 +28,6 @@ winrt-Windows.Foundation.Collections>=3.0 ; sys_platform == "win32"
 # Optional desktop shell (--window): native window, global hotkey, tray icon
 pywebview>=5.0 ; sys_platform == "win32"
 pystray>=0.19 ; sys_platform == "win32"
-pillow>=10 ; sys_platform == "win32"
+
+# Image search by description (the clip-zh add-on) and the tray icon decode/draw with Pillow
+pillow>=10

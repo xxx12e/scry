@@ -80,6 +80,9 @@ class SearchEngine:
         self._shown_lock = threading.Lock()
         self.load_error = ""
         self.filename_backend = None      # "everything" | "windows" (fallback) | None
+        self.clip = None                  # image-search pack (DLC), loaded on first use
+        self.images = None                # ImageIndex for it
+        self._clip_lock = threading.Lock()
         # optional DLC model pack overrides the bundled model (auto-scanned)
         ov = dlc.model_override(self.index_dir)
         if ov:
@@ -211,10 +214,94 @@ class SearchEngine:
         parts = full[len(best) + 1:].split(os.sep)[:-1]     # dirs below the root
         return any(self._excluded_dir(d) for d in parts if d)
 
+    # ---- image search by description (optional CLIP pack) ----
+    def images_enabled(self):
+        return dlc.clip_dir(self.index_dir) is not None
+
+    def wants_image(self, path):
+        return self.images_enabled() and os.path.splitext(str(path))[1].lower() in ocr.IMAGE_EXT
+
+    def _clip(self):
+        if self.clip is None:
+            d = dlc.clip_dir(self.index_dir)
+            if d is None:
+                return None
+            with self._clip_lock:
+                if self.clip is None:
+                    try:
+                        from .clip import ClipBackend, ImageIndex
+                        clip = ClipBackend(d)
+                        self.images = ImageIndex.load(self.index_dir, clip.tag)
+                        self.clip = clip
+                    except Exception as e:
+                        log.warning("image search pack unusable: %s", e)
+                        return None
+        return self.clip
+
+    def image_status(self):
+        on = self.images_enabled()
+        return dict(available=on, count=len(self.images) if (on and self.images is not None) else None)
+
+    def _build_images(self, found, dirs, cancel_check=None, progress=None):
+        """Embed new/changed images under `dirs`, drop deleted ones (diff, like text)."""
+        clip = self._clip()
+        if clip is None or found is None:
+            return {}
+        current = {p: (m, s) for p, m, s in found}
+        with self._lock:
+            ix = self.images
+            removed = [p for p in list(ix.meta) if _under_any(p, dirs) and p not in current]
+            for p in removed:
+                ix.remove(p)
+            todo = [p for p, (m, s) in current.items() if not ix.unchanged(p, m, s)]
+        added = 0
+        for a in range(0, len(todo), 16):
+            if cancel_check is not None and cancel_check():
+                break
+            batch = todo[a:a + 16]
+            vecs, ok = clip.embed_images(batch)         # heavy: outside the lock
+            with self._lock:
+                for p, v in zip(ok, vecs):
+                    ix.add(p, current[p][0], current[p][1], v)
+                    added += 1
+            if progress is not None:
+                try:
+                    progress(min(a + 16, len(todo)), len(todo), batch[-1])
+                except Exception:
+                    pass
+        if removed or added:
+            with self._lock:
+                ix.save(self.index_dir)
+        return dict(images_added=added, images_removed=len(removed), images=len(ix))
+
+    def _update_image(self, path, st):
+        clip = self._clip()
+        if clip is None or self._cloud_skip(st):
+            return
+        with self._lock:
+            if self.images.unchanged(path, st.st_mtime, st.st_size):
+                return
+        vecs, ok = clip.embed_images([path])
+        if ok:
+            with self._lock:
+                self.images.add(path, st.st_mtime, st.st_size, vecs[0])
+                self.images.save(self.index_dir)
+
+    def search_images(self, query, top_k=20, filters=None):
+        clip = self._clip()
+        if clip is None or not self.images:
+            return []
+        q = clip.embed_texts([query])[0]
+        filtered = filters is not None and filters.filtered
+        with self._lock:
+            res = self.images.search(q, top_k * 4 if filtered else top_k)
+        hits = [Hit(p, s, "", 0, 0) for p, s in res if not filtered or filters.match(p)]
+        return hits[:top_k]
+
     def _cloud_skip(self, st):
         return not self.cfg.index_cloud_files and cloud_only(st)
 
-    def _walk(self, root, unread=None):
+    def _walk(self, root, unread=None, images=None):
         """scandir walk yielding (path, mtime, size, cloud_only); prunes system/
         junk dirs. `unread` (Counter) tallies document-like files we skip --
         unsupported types, and images while OCR is off -- by extension."""
@@ -240,8 +327,13 @@ class SearchEngine:
                             continue
                         dot = name.rfind(".")
                         ext = name[dot:].lower() if dot >= 0 else ""
+                        if images is not None and ext in ocr.IMAGE_EXT:
+                            ist = entry.stat()
+                            if ist.st_size <= max_bytes and not self._cloud_skip(ist):
+                                images.append((entry.path, ist.st_mtime, ist.st_size))
                         if ext not in exts:
-                            if unread is not None and ext in skipped_kinds:
+                            if (unread is not None and ext in skipped_kinds
+                                    and not (images is not None and ext in ocr.IMAGE_EXT)):
                                 unread[ext] += 1
                             continue
 
@@ -339,11 +431,12 @@ class SearchEngine:
         _ = self.embedder
         from collections import Counter
         current, cloud, unread, failed_by = {}, set(), Counter(), Counter()
+        images = [] if self.images_enabled() else None
         for d in dirs:
             if not os.path.isdir(d):
                 log.warning("not a directory, skipping: %s", d)
                 continue
-            for p, mtime, size, is_cloud in self._walk(d, unread):
+            for p, mtime, size, is_cloud in self._walk(d, unread, images):
                 current[p] = (mtime, size)
                 if is_cloud:
                     cloud.add(p)
@@ -447,11 +540,18 @@ class SearchEngine:
                     if not cids and _under_any(p, dirs):
                         failed_by[os.path.splitext(p)[1].lower() or "?"] += 1
         stats["failed_by"] = dict(failed_by.most_common(12))
+        if images is not None and not cancelled:
+            stats.update(self._build_images(images, dirs, cancel_check, progress_callback))
         log.info("build done: %s | total %d files / %d chunks", stats, n_files, n_chunks)
         return stats
 
     def update_file(self, path, persist=False, defer=False):
         path = str(Path(path).resolve())
+        if self.wants_image(path) and os.path.exists(path):
+            try:
+                self._update_image(path, os.stat(path))
+            except OSError:
+                pass
         if not os.path.exists(path) or not is_supported(path):
             return 0
         try:
@@ -486,6 +586,10 @@ class SearchEngine:
 
     def remove_file(self, path, persist=False, defer=False):
         path = str(Path(path).resolve())
+        if self.images is not None:
+            with self._lock:
+                if self.images.remove(path):
+                    self.images.save(self.index_dir)
         with self._lock:
             if self.index is None:
                 return 0

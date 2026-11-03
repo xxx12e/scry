@@ -34,6 +34,19 @@ REGISTRY = [
         "size": 519983424,
         "sha256": "e36625c6e8eba10a2876d31f63b36417025b8e34677c3c2ed1ac7ea94c1bf681",
     },
+    {
+        # Build with scripts/export_clip.py (Chinese-CLIP ViT-B/16), zip the output
+        # folder, publish it as a release asset, then fill url/size/sha256 here.
+        "id": "clip-zh",
+        "kind": "image-model",
+        "name_zh": "以文搜图包 · 中英",
+        "name_en": "Search images by description",
+        "desc_zh": "用一句话找照片和图片（「海边日落」「发票的照片」），不需要图里有文字。约 380 MB；装好后重新扫描一次，图片会按内容建索引。",
+        "desc_en": "Find photos and images by describing them (\"sunset at the beach\", \"photo of a receipt\") -- no text in the image needed. ~380 MB; rescan once after installing.",
+        "url": "",
+        "size": 0,
+        "sha256": "",
+    },
 ]
 
 
@@ -55,6 +68,12 @@ def is_installed(index_dir, pid):
     if p and p["kind"] == "model":
         return (d / "config.json").exists()
     return d.exists() and any(d.iterdir()) if d.exists() else False
+
+
+def clip_dir(index_dir):
+    """Installed image-search pack dir (text.onnx + vision.onnx), or None."""
+    d = pack_dir(index_dir, "clip-zh")
+    return str(d) if (d / "text.onnx").exists() and (d / "vision.onnx").exists() else None
 
 
 def model_override(index_dir):
