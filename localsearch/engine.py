@@ -602,9 +602,64 @@ class SearchEngine:
                                             max_sents=self.cfg.snippet_sents_per_hit)
         return hits
 
+    # ---- more like this ----
+    def similar(self, path, top_k=10):
+        """Files whose content is closest to `path`: its mean chunk embedding is
+        the query (dense only -- there are no words). A file outside the deep
+        index is embedded on the fly from its first chunks. -> (hits, qvec)."""
+        own, vecs = None, []
+        with self._lock:
+            if self.index is None or self.index.dense.ntotal == 0:
+                return [], None
+            cids = self.index.file_chunks.get(path)
+            if cids is None:
+                key = os.path.normcase(os.path.abspath(path))
+                own = next((p for p in self.index.file_chunks
+                            if os.path.normcase(p) == key), None)
+                cids = self.index.file_chunks.get(own) if own else None
+            else:
+                own = path
+            for c in (cids or [])[:64]:
+                v = self._reconstruct(c)
+                if v is not None:
+                    vecs.append(v)
+        if not vecs:
+            try:
+                if os.path.getsize(path) > self.cfg.max_file_mb * 1e6:
+                    return [], None
+            except OSError:
+                return [], None
+            text = parse_file(path)
+            chunks = chunk_text(text, self.cfg.chunk_max_words)[:8] if text else []
+            if not chunks:
+                return [], None
+            vecs = list(self.embedder.embed_docs([c[0] for c in chunks]))
+        q = np.mean(np.vstack(vecs), axis=0)
+        q = (q / (np.linalg.norm(q) or 1.0)).astype(np.float32)[None, :]
+        skip = {os.path.normcase(own or path)}
+        with self._lock:
+            if self.index is None:
+                return [], None
+            fetch = min(self.index.dense.ntotal, top_k * 4 + len(cids or []))
+            best = {}
+            for cid, score in self.index.search_dense(q, fetch):
+                meta = self.index.chunk_meta.get(cid)
+                if meta is None or os.path.normcase(meta["path"]) in skip:
+                    continue
+                if meta["path"] not in best:
+                    best[meta["path"]] = Hit(meta["path"], score, meta["text"], meta["start"],
+                                             meta["end"], cid=cid)
+                if len(best) >= top_k:
+                    break
+        hits = list(best.values())
+        for h in hits:
+            h.snippet = lexical_snippet(h.chunk_text, [])
+        return hits, q
+
     # ---- progressive snippets ----
     def queue_snippets(self, mode, query, hits):
-        """Remember hits whose semantic snippets the UI will ask for next;
+        """Remember hits whose semantic snippets the UI will ask for next
+        (`query`: the query text, or a ready query vector as from similar());
         returns an id for resolve_snippets() (bounded, one-shot)."""
         import secrets
         sid = secrets.token_hex(8)
@@ -623,7 +678,7 @@ class SearchEngine:
         if job is None:
             return {}
         mode, query, hits = job
-        qvec = self._qvec(query)
+        qvec = query if isinstance(query, np.ndarray) else self._qvec(query)
         if mode == "instant":
             self._deepen_instant_snippets(hits, qvec)
         else:

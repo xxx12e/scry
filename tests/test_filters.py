@@ -1,3 +1,4 @@
+from conftest import settle
 import os
 from datetime import datetime
 
@@ -74,6 +75,7 @@ def test_filename_mode_translates_and_rechecks(eng, monkeypatch, tmp_path):
 def test_api_reports_filters_and_suggestion(fake_embedder, tmp_path, corpus):
     from localsearch import app as A
     app, engine, state = A.create_app(tmp_path / "i")
+    settle(state)
     engine.build([corpus])
     c = app.test_client()
     r = c.post("/api/search", json={"query": "reservoir type:text", "mode": "semantic"}).get_json()

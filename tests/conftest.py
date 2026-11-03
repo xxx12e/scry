@@ -55,3 +55,13 @@ def corpus(tmp_path):
         "# Bench\nThe radix index cut tail query latency to nine milliseconds.", encoding="utf-8")
     (d / "invoice.txt").write_text("今年第三季度的发票报销流程已经改为线上审批。", encoding="utf-8")
     return d
+
+
+def settle(state, timeout=10):
+    """Wait for create_app's background warm-up/catch-up so no thread outlives
+    the test (and the monkeypatched embedder)."""
+    import time
+    state.warm_done.wait(timeout)
+    deadline = time.time() + timeout
+    while state.building and time.time() < deadline:
+        time.sleep(0.01)

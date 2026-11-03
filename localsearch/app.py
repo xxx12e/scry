@@ -71,6 +71,7 @@ class AppState:
         self.settings = self._load_settings()
         self.building = False
         self.catchup = False          # the running build is the startup catch-up scan
+        self.warm_done = threading.Event()   # model warm-up (and catch-up kick-off) finished
         self.build_lock = threading.Lock()
         self.cancel = False
         self.last_build = None
@@ -174,6 +175,12 @@ def create_app(index_dir, config=None):
     state.resume_watch()
 
     def _warm():
+        try:
+            _warm_inner()
+        finally:
+            state.warm_done.set()
+
+    def _warm_inner():
         # BM25 needs no model: build it while the model loads, not after
         prep = threading.Thread(target=engine.prepare_index, daemon=True)
         prep.start()
@@ -455,6 +462,31 @@ def create_app(index_dir, config=None):
         if sid:
             out["snip_id"] = sid
         return jsonify(**out)
+
+    @app.post("/api/similar")
+    def similar():
+        """More like this: files whose content is closest to a shown result."""
+        d = _body()
+        path = str(d.get("path") or "")
+        try:
+            k = min(max(int(d.get("top_k", 20)), 1), _TOP_K_MAX)
+        except (TypeError, ValueError):
+            k = 20
+        if not path or not os.path.exists(path):
+            return jsonify(ok=False, code="no_file", error="File no longer exists."), 404
+        if not state.was_shown(path):
+            return jsonify(ok=False, code="not_result",
+                           error="Only files from search results can be used."), 403
+        hits, qvec = engine.similar(path, top_k=k)
+        name = os.path.basename(path)
+        if not hits:
+            return jsonify(results=[], code="no_similar", similar_to=name,
+                           error="No similar files in the deep index.")
+        sid = engine.queue_snippets("semantic", qvec, hits)
+        res = [r for r in (_result(h.path, snippet=h.snippet, score=round(h.score, 3),
+                                   terms=[]) for h in hits) if r is not None]
+        state.remember_shown(r["path"] for r in res)
+        return jsonify(results=res, snip_id=sid, similar_to=name)
 
     @app.post("/api/snippets")
     def snippets():

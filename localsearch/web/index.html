@@ -217,6 +217,8 @@ const I18N = {
     flt_type:"类型 {value}", flt_in:"路径含「{value}」", flt_after:"{value} 之后", flt_before:"{value} 之前",
     flt_time:"修改于 {start} ~ {end}", ttl_rmflt:"去掉这个筛选",
     flt_suggest:"只看「{phrase}」修改的文件？（{start} ~ {end}）", flt_unknown:"没看懂的筛选（已当作普通文字）：{u}",
+    btn_similar:"找相似", ttl_similar:"找出内容与它相近的其他文件（基于深度索引）",
+    sim_note:"与「{name}」内容相似的文件", err_no_similar:"深度索引里没有相似的文件（先把相关文件夹加入「深度语义」）。",
     flt_routed:"只有筛选条件：已用文件名索引列出全盘符合条件的文件（最新的在前）",
     err_forbidden:"拒绝访问：只接受本机页面的请求。",
     generic_fail:"操作失败", open_fail:"无法打开",
@@ -290,6 +292,8 @@ const I18N = {
     flt_type:"type {value}", flt_in:"path contains “{value}”", flt_after:"after {value}", flt_before:"before {value}",
     flt_time:"modified {start} – {end}", ttl_rmflt:"Remove this filter",
     flt_suggest:"Only files modified “{phrase}”? ({start} – {end})", flt_unknown:"Filter not understood (kept as words): {u}",
+    btn_similar:"Find similar", ttl_similar:"Other files whose content is close to this one (deep index)",
+    sim_note:"Files similar to “{name}”", err_no_similar:"No similar files in the deep index (add the relevant folders to Deep Semantic first).",
     flt_routed:"Filters only: listed matching files from the filename index across the disk (newest first)",
     err_forbidden:"Refused: only requests from this computer's own page are accepted.",
     generic_fail:"Operation failed", open_fail:"Cannot open",
@@ -610,6 +614,7 @@ document.getElementById('results').addEventListener('click', ev=>{
   const path = b.closest('.res').dataset.path;
   if(b.dataset.act==='open') openPath(path, false);
   else if(b.dataset.act==='reveal') openPath(path, true);
+  else if(b.dataset.act==='similar') findSimilar(path);
 });
 function renderResults(items, mode){
   const box=document.getElementById('results');
@@ -635,6 +640,7 @@ function renderResults(items, mode){
       <div class="acts">
         <button data-act="open">${escapeHtml(t('btn_open'))}</button>
         <button data-act="reveal">${escapeHtml(t('btn_reveal'))}</button>
+        <button data-act="similar" title="${escapeHtml(t('ttl_similar'))}">${escapeHtml(t('btn_similar'))}</button>
       </div></div>`;
   }).join('');
 }
@@ -661,6 +667,21 @@ async function doSearch(){
   if(r.snip_id) upgradeSnippets(r.snip_id, my);
 }
 let LAST_RESP = null;
+async function findSimilar(path){
+  const box=document.getElementById('results'); const err=document.getElementById('searchErr');
+  const my = ++SEQ; SEL=-1; err.textContent='';
+  box.innerHTML = '<div class="empty">'+t('st_searching')+'</div>';
+  const k = parseInt(document.getElementById('topk').value, 10) || 20;
+  const r = await api('/api/similar', {path, top_k:k});
+  if(my!==SEQ) return;
+  err.textContent = r.error? emsg(r) : '';
+  LAST_RESP = r; renderFilters(r, 'similar');
+  LAST_RESULTS = r.results||[]; LAST_MODE = 'semantic';
+  if(r.snip_id) LAST_RESULTS.forEach(it=>{ it.snipPending = true; });
+  renderResults(LAST_RESULTS, 'semantic');
+  window.scrollTo({top:0, behavior:'smooth'});
+  if(r.snip_id) upgradeSnippets(r.snip_id, my);
+}
 function fltLabel(f){
   if(f.kind==='time') return t('flt_time', {start:f.start, end:f.end});
   return t('flt_'+f.kind, {value:f.value});
@@ -673,6 +694,7 @@ function renderFilters(r, mode){
   if(r && r.suggest) parts.push(`<button class="langbtn" style="padding:3px 10px;font-size:12px" data-op="${escapeHtml(r.suggest.op)}">`+
     `${escapeHtml(t('flt_suggest', {phrase:r.suggest.phrase, start:r.suggest.start, end:r.suggest.end}))}</button>`);
   if(r && (r.unknown||[]).length) parts.push(`<span class="note warn" style="margin:0">${escapeHtml(t('flt_unknown', {u:r.unknown.join(' ')}))}</span>`);
+  if(r && r.similar_to) parts.push(`<span class="chip flt"><span>${escapeHtml(t('sim_note', {name:r.similar_to}))}</span></span>`);
   if(r && r.mode_used==='filename' && mode!=='filename') parts.push(`<span class="note" style="margin:0">${escapeHtml(t('flt_routed'))}</span>`);
   row.innerHTML = parts.join(' ');
   row.style.display = parts.length? 'flex' : 'none';

@@ -1,3 +1,4 @@
+from conftest import settle
 import localsearch.engine as E
 from localsearch import Config
 from localsearch.search import Hit, VecCache, lexical_snippet, make_snippets
@@ -42,6 +43,7 @@ def test_progressive_equals_synchronous(fake_embedder, corpus, tmp_path):
 def test_api_search_then_snippets(fake_embedder, corpus, tmp_path):
     from localsearch import app as A
     app, engine, state = A.create_app(tmp_path / "idx")
+    settle(state)
     engine.build([corpus])
     c = app.test_client()
     r = c.post("/api/search", json={"query": "reservoir water", "mode": "semantic"}).get_json()

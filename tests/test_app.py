@@ -1,3 +1,4 @@
+from conftest import settle
 import pytest
 
 from localsearch import app as A
@@ -6,6 +7,7 @@ from localsearch import app as A
 @pytest.fixture
 def client(fake_embedder, tmp_path):
     app, engine, state = A.create_app(tmp_path / "idx")
+    settle(state)
     app.testing = True
     yield app.test_client(), engine, state
     engine.close()
@@ -75,6 +77,7 @@ def test_startup_catch_up_scan(fake_embedder, corpus, tmp_path):
     idx.mkdir()
     (idx / "folders.json").write_text(json.dumps([str(corpus)]))
     app, engine, state = A.create_app(idx)
+    settle(state)
     deadline = time.time() + 10
     while time.time() < deadline and not (state.last_build and not state.building):
         time.sleep(0.02)
