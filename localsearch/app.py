@@ -440,6 +440,8 @@ def create_app(index_dir, config=None):
                 return jsonify(results=[], code="no_everything",
                                error="Everything (es.exe) not available.", **meta)
             res = [_result(p, snippet="", score=None, terms=[]) for p in paths]
+            if engine.filename_backend == "windows":
+                meta["note"] = "fn_windows"     # fallback: indexed locations only
         elif mode == "instant":
             if not ws_available:
                 return jsonify(results=[], code="ws_down",

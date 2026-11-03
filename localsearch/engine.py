@@ -79,6 +79,7 @@ class SearchEngine:
         self._last_shown = OrderedDict()  # normcased path -> vec (recent shown, for record_open)
         self._shown_lock = threading.Lock()
         self.load_error = ""
+        self.filename_backend = None      # "everything" | "windows" (fallback) | None
         # optional DLC model pack overrides the bundled model (auto-scanned)
         ov = dlc.model_override(self.index_dir)
         if ov:
@@ -781,6 +782,12 @@ class SearchEngine:
                       if f["kind"] == "in"]
             limit = limit * 3
         paths = filename_search(self.cfg.es_exe, " ".join(parts), limit, self.cfg.es_timeout_s)
+        self.filename_backend = "everything"
+        if paths is None:                      # no Everything: the OS index instead
+            from . import winsearch
+            paths = winsearch.filename_query(query, limit, scope,
+                                             filters.exts if filters is not None else None)
+            self.filename_backend = "windows" if paths is not None else None
         if paths is not None and filters is not None and filters.filtered:
             paths = [p for p in paths if filters.match(p)][:limit // 3]
         return paths

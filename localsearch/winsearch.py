@@ -121,6 +121,27 @@ def query(text, limit=200, scope=None, min_results=None, exts=None):
     return merged[:limit]
 
 
+def filename_query(text, limit=50, scope=None, exts=None):
+    """Filename search through the OS index -- the fallback when Everything is
+    not installed. Covers only indexed locations (usually the user folders),
+    not the whole disk. Everything-style * and ? wildcards are honoured.
+    -> [path] newest first, or None if the provider failed."""
+    terms = [t for t in re.split(r"\s+", text.replace("'", " ").replace('"', " ")) if t]
+    where = []
+    for t in terms[:8]:
+        like = t.replace("%", "").replace("_", "").replace("*", "%").replace("?", "_")
+        where.append("System.FileName LIKE '%%%s%%'" % like)
+    if scope:
+        where.append("SCOPE='file:%s'" % str(scope).replace("'", "''"))
+    if not where and not exts:
+        return []
+    sql = (f"SELECT TOP {int(limit)} System.ItemUrl, System.ItemName FROM SystemIndex "
+           f"WHERE {' AND '.join(where) or '1=1'}{_ext_sql(exts)} "
+           f"ORDER BY System.DateModified DESC")
+    rows = _run_sql(sql)
+    return None if rows is None else [p for p, _ in rows]
+
+
 if __name__ == "__main__":
     import os
     import sys

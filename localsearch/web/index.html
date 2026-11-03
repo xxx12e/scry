@@ -224,6 +224,7 @@ const I18N = {
     flt_type:"类型 {value}", flt_in:"路径含「{value}」", flt_after:"{value} 之后", flt_before:"{value} 之前",
     flt_time:"修改于 {start} ~ {end}", ttl_rmflt:"去掉这个筛选",
     flt_suggest:"只看「{phrase}」修改的文件？（{start} ~ {end}）", flt_unknown:"没看懂的筛选（已当作普通文字）：{u}",
+    fn_windows:"没有找到 Everything：已改用 Windows 搜索索引查文件名（只覆盖已索引的位置，通常是用户文件夹；装上 Everything 即可全盘秒搜）",
     btn_similar:"找相似", ttl_similar:"找出内容与它相近的其他文件（基于深度索引）",
     sim_note:"与「{name}」内容相似的文件", err_no_similar:"深度索引里没有相似的文件（先把相关文件夹加入「深度语义」）。",
     flt_routed:"只有筛选条件：已用文件名索引列出全盘符合条件的文件（最新的在前）",
@@ -304,6 +305,7 @@ const I18N = {
     flt_type:"type {value}", flt_in:"path contains “{value}”", flt_after:"after {value}", flt_before:"before {value}",
     flt_time:"modified {start} – {end}", ttl_rmflt:"Remove this filter",
     flt_suggest:"Only files modified “{phrase}”? ({start} – {end})", flt_unknown:"Filter not understood (kept as words): {u}",
+    fn_windows:"Everything not found: searched file names in the Windows Search index instead (indexed locations only, usually your user folders; install Everything for whole-disk results)",
     btn_similar:"Find similar", ttl_similar:"Other files whose content is close to this one (deep index)",
     sim_note:"Files similar to “{name}”", err_no_similar:"No similar files in the deep index (add the relevant folders to Deep Semantic first).",
     flt_routed:"Filters only: listed matching files from the filename index across the disk (newest first)",
@@ -739,6 +741,7 @@ function renderFilters(r, mode){
   if(r && r.suggest) parts.push(`<button class="langbtn" style="padding:3px 10px;font-size:12px" data-op="${escapeHtml(r.suggest.op)}">`+
     `${escapeHtml(t('flt_suggest', {phrase:r.suggest.phrase, start:r.suggest.start, end:r.suggest.end}))}</button>`);
   if(r && (r.unknown||[]).length) parts.push(`<span class="note warn" style="margin:0">${escapeHtml(t('flt_unknown', {u:r.unknown.join(' ')}))}</span>`);
+  if(r && r.note) parts.push(`<span class="note" style="margin:0">${escapeHtml(t(r.note))}</span>`);
   if(r && r.similar_to) parts.push(`<span class="chip flt"><span>${escapeHtml(t('sim_note', {name:r.similar_to}))}</span></span>`);
   if(r && r.mode_used==='filename' && mode!=='filename') parts.push(`<span class="note" style="margin:0">${escapeHtml(t('flt_routed'))}</span>`);
   row.innerHTML = parts.join(' ');
