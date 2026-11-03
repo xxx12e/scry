@@ -28,11 +28,15 @@ class Hit:
     personal: bool = False        # True if history boosted this hit
 
 
-def _minmax(pairs):
+def _minmax(pairs, floor=None):
+    """Min-max normalize; `floor` lowers the minimum (BM25: chunks that were not
+    returned score 0, and rank_bm25 used to return them as zero-score padding)."""
     if not pairs:
         return {}
     vs = [s for _, s in pairs]
     lo, hi = min(vs), max(vs)
+    if floor is not None:
+        lo = min(lo, floor)
     rng = (hi - lo) or 1.0
     return {cid: (s - lo) / rng for cid, s in pairs}
 
@@ -85,7 +89,10 @@ def retrieve(index, qvec, qtokens, top_k, alpha, fetch):
     """Hybrid retrieval -> top_k files with best chunk; call under the lock."""
     dense = index.search_dense(qvec, fetch)
     bm25 = index.search_bm25(qtokens, fetch)
-    dn, bn = _minmax(dense), _minmax(bm25)
+    # fewer matches than `fetch`: the unreturned chunks score 0, so normalize
+    # against 0 -- exactly what the zero-padded rank_bm25 top-k used to give
+    dn = _minmax(dense)
+    bn = _minmax(bm25, floor=0.0 if len(bm25) < fetch else None)
     fused = {}
     for cid in set(dn) | set(bn):
         fused[cid] = alpha * dn.get(cid, 0.0) + (1 - alpha) * bn.get(cid, 0.0)

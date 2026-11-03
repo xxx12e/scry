@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from .config import Config
 from . import parser
+from . import resources
 from . import ocr
 from .parser import parse_file, is_supported
 from .chunker import chunk_text, tokenize
@@ -65,11 +66,12 @@ class SearchEngine:
             self.cfg.model_name = ov
             log.info("DLC model pack active: %s", ov)
         parser.set_ocr(self.cfg.ocr)     # image OCR (opt-in; Windows built-in)
+        self._model_tag = resources.model_tag(self.cfg.model_name)
         self.index = None
         if DualIndex.exists(self.index_dir):
             try:
                 self.index = DualIndex.load(self.index_dir)
-                if self.index.model_tag and self.index.model_tag != self.cfg.model_name:
+                if not resources.model_tag_matches(self.index.model_tag, self.cfg.model_name):
                     raise IndexVersionError("embedding model changed")
             except IndexVersionError as e:
                 log.warning("index version changed (%s); rebuild needed", e)
@@ -90,14 +92,24 @@ class SearchEngine:
     @property
     def embedder(self):
         if self._embedder is None:
+            mismatch = False
             with self._emb_lock:
                 if self._embedder is None:
                     emb = Embedder(self.cfg)
-                    if self.index is not None and self.index.dim != emb.dim:
-                        log.error("model dim %d != index dim %d -- rebuild the index "
-                                  "(delete %s) after changing the model",
-                                  emb.dim, self.index.dim, self.index_dir)
+                    idx = self.index
+                    mismatch = idx is not None and idx.dim != emb.dim
                     self._embedder = emb
+            if mismatch:
+                # vectors of another width would crash every FAISS search: move the
+                # index aside so the next scan rebuilds it (outside _emb_lock to
+                # keep the _lock -> _emb_lock order used by _ensure_index)
+                with self._lock:
+                    if self.index is not None and self.index.dim != self._embedder.dim:
+                        log.error("model dim %d != index dim %d -- index quarantined, "
+                                  "rescan to rebuild", self._embedder.dim, self.index.dim)
+                        self.index = None
+                        DualIndex.quarantine(self.index_dir)
+                        self.load_error = "idx_version"
         return self._embedder
 
     def warmup(self):
@@ -113,14 +125,16 @@ class SearchEngine:
     def prepare_index(self):
         """Build BM25 off the startup critical path (loads are lazy now)."""
         try:
-            self._rebuild_bm25_coalesced(force=True)
+            # derived state only: building it must not schedule a full index save
+            # (that rewrote the whole index ~2 min after every launch)
+            self._rebuild_bm25_coalesced(force=True, mark_save=False)
         except Exception as e:
             log.warning("bm25 prepare failed: %s", e)
 
     def _ensure_index(self):
         if self.index is None:
             self.index = DualIndex(self.embedder.dim)
-        self.index.model_tag = self.cfg.model_name    # stamp for the DLC/model guard
+        self.index.model_tag = self._model_tag    # stamp for the DLC/model guard
 
 
     def _hash(self, path):
@@ -149,6 +163,23 @@ class SearchEngine:
         if self.cfg.exclude_hidden and (name.startswith(".") or name.startswith("$")):
             return True
         return False
+
+    def in_excluded_dir(self, path, roots):
+        """True if `path` lies under a dir that _walk() would prune (system/junk/
+        hidden), judged relative to the most specific of `roots` -- so the live
+        watcher indexes exactly what a rescan would, and a folder the user added
+        explicitly is never excluded just because of where it lives."""
+        full = os.path.abspath(str(path))
+        key = os.path.normcase(full)
+        best = None
+        for r in roots:
+            rn = os.path.normcase(os.path.abspath(str(r))).rstrip("\\/")
+            if key.startswith(rn + os.sep) and (best is None or len(rn) > len(best)):
+                best = rn
+        if best is None:
+            return False
+        parts = full[len(best) + 1:].split(os.sep)[:-1]     # dirs below the root
+        return any(self._excluded_dir(d) for d in parts if d)
 
     def _walk(self, root):
         """scandir walk yielding (path, mtime, size); prunes system/junk dirs."""
@@ -331,13 +362,15 @@ class SearchEngine:
                     flush_batch()
         flush_batch()
 
-        self._rebuild_bm25_coalesced(force=True)
-        if persist:
-            try:
-                self.save()
-            except Exception as e:
-                log.error("build save failed (periodic save will retry): %s", e)
-                self._schedule_save()
+        if added or updated or removed or failed:
+            self._rebuild_bm25_coalesced(force=True)
+            if persist:
+                try:
+                    self.save()
+                except Exception as e:
+                    log.error("build save failed (periodic save will retry): %s", e)
+                    self._schedule_save()
+        # else: a no-op diff (e.g. the startup catch-up scan) touches nothing on disk
         stats = dict(added=added, updated=updated, removed=removed, skipped=skipped,
                      failed=failed, cancelled=bool(cancelled))
         with self._lock:
@@ -432,18 +465,31 @@ class SearchEngine:
             self._dirty = False
             self._rebuild_bm25_coalesced(force=True)
 
-    def _rebuild_bm25_coalesced(self, force=False):
-        """Snapshot tokens under the lock, fit BM25 outside it, swap back under it."""
+    def _rebuild_bm25_coalesced(self, force=False, mark_save=True):
+        """Make sure BM25 exists, then (if `mark_save`) schedule a save.
+
+        BM25 is maintained incrementally by the index, so this only does real
+        work once per load: snapshot tokens under the lock, build outside it,
+        install under it (mutations made meanwhile are replayed). `mark_save` says
+        the index content changed (BM25 itself is never saved); re-tokenized
+        chunks (tokenizer upgrade) are worth persisting either way."""
+        regenerated = 0
         with self._lock:
-            if self.index is None:
+            ix = self.index
+            if ix is None:
                 return
-            cids, toks = self.index.bm25_inputs()
-        bm25 = DualIndex.build_bm25(toks)
-        with self._lock:
-            if self.index is not None:
-                self.index.set_bm25(cids, bm25)
-        self._save_pending = True
-        self._schedule_save()
+            if not ix.bm25_built():
+                bid, cids, toks, missing = ix.bm25_inputs()
+            else:
+                bid = None
+        if bid is not None:
+            bm25 = DualIndex.build_bm25(cids, toks, missing)   # outside the lock
+            with self._lock:
+                if self.index is ix and ix.set_bm25(bid, bm25):
+                    regenerated = len(bm25.regenerated)
+        if mark_save or regenerated:
+            self._save_pending = True
+            self._schedule_save()
 
     def _schedule_save(self):
         if self._closing or self._save_timer is not None:
@@ -489,7 +535,10 @@ class SearchEngine:
         with self._lock:
             if self.index is None or self.index.dense.ntotal == 0:
                 return []
-            self.index.ensure_bm25()
+            if not self.index.bm25_building():
+                self.index.ensure_bm25()       # library use; the app pre-builds it
+            # else: still building in the background -> dense-only for now rather
+            # than stalling every search (and the status poll) on the lock
             hits = retrieve(self.index, qvec, qtokens, want,
                             self.cfg.alpha, self.cfg.fusion_fetch)
             vecs = ({h.path: self._reconstruct(h.cid) for h in hits}
@@ -570,7 +619,7 @@ class SearchEngine:
         return texts, np.vstack(rows)
 
     def search_instant_global(self, query, top_k=20, candidates=None, scope=None):
-        """Whole-disk semantic search, no pre-indexing (Windows Search + bge rerank)."""
+        """Whole-disk semantic search, no pre-indexing (Windows Search + e5 rerank)."""
         from . import winsearch
         cands = winsearch.query(query, limit=candidates or self.cfg.instant_candidates,
                                 scope=scope, min_results=top_k)
@@ -704,6 +753,8 @@ def _under_any(path, dirs):
     p = os.path.normcase(os.path.abspath(path))
     for d in dirs:
         d = os.path.normcase(os.path.abspath(d))
-        if p == d or p.startswith(d + os.sep):
+        # a drive root ("c:\\", "/") already ends in a separator: strip before
+        # appending one, or nothing would ever count as "under" a whole drive
+        if p == d or p.startswith(d.rstrip("\\/") + os.sep):
             return True
     return False

@@ -4,7 +4,7 @@ import re
 
 log = logging.getLogger("localsearch.winsearch")
 _PROVIDER = "Provider=Search.CollatorDSO;Extended Properties='Application=Windows';"
-_TERM = re.compile(r"[a-zA-Z0-9]+")
+_TERM = re.compile(r"[^\W_]+")          # words of any script (CJK split out below)
 _CJK_RUN = re.compile(r"[぀-ヿ㐀-䶿一-鿿]+")
 
 
@@ -22,7 +22,7 @@ def _sanitize(text):
 
 def _or_terms(terms):
     """Split a sanitized query into OR-able terms: words + CJK bigrams."""
-    out = list(_TERM.findall(terms))
+    out = list(_TERM.findall(_CJK_RUN.sub(" ", terms)))
     for run in _CJK_RUN.findall(terms):
         if len(run) <= 2:
             out.append(run)

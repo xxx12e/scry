@@ -185,6 +185,7 @@ const I18N = {
     nt_rescan_started:"已开始重新扫描（只扫有变化的文件）",
     nt_ws_switch:"Windows 搜索服务未开启，已自动切到「文件名」模式",
     st_building:"正在建立索引… {done}/{total} 个文件{file}",
+    st_catchup:"正在检查上次关闭后的文件变化（只处理有变化的）… {done}/{total}{file}",
     st_ready:"已索引 {files} 个文件 / {chunks} 个文本块 · {model} · {folders}",
     st_folders_n:"掌控 {n} 个文件夹", st_no_folders:"尚未掌控文件夹",
     st_model:"模型 {name}", st_model_loading:"AI 模型加载中（首次约 10-20 秒）…",
@@ -206,6 +207,8 @@ const I18N = {
     err_idx_version:"索引版本已升级，需要重新扫描一次（旧索引已移开）。",
     err_idx_corrupt:"检测到索引文件损坏（可能因断电/强制关机），需要重新扫描。",
     err_idx_load:"索引加载失败，需要重新扫描。",
+    err_not_result:"只能打开搜索结果里的文件（请重新搜索一次）。",
+    err_forbidden:"拒绝访问：只接受本机页面的请求。",
     generic_fail:"操作失败", open_fail:"无法打开",
     pers_label:"个性化", ttl_pers:"根据你打开过的文件，在本地学习你的偏好，把更相关的往前排（全程本地、从不上传、也从不训练模型）",
     btn_forget:"忘记我", ttl_forget:"清空本地学到的偏好（打开记录 + 兴趣向量）",
@@ -250,6 +253,7 @@ const I18N = {
     nt_rescan_started:"Started rescanning (only changed files)",
     nt_ws_switch:"Windows Search service is off — switched to Filename mode automatically",
     st_building:"Indexing… {done}/{total} files{file}",
+    st_catchup:"Checking for changes since the last run (only changed files are processed)… {done}/{total}{file}",
     st_ready:"{files} files / {chunks} text chunks indexed · {model} · {folders}",
     st_folders_n:"{n} folder(s) controlled", st_no_folders:"no folders controlled yet",
     st_model:"model {name}", st_model_loading:"loading AI model (first time ~10-20s)…",
@@ -271,6 +275,8 @@ const I18N = {
     err_idx_version:"The index format was upgraded — one rescan is needed (the old index was moved aside).",
     err_idx_corrupt:"The index files look damaged (possibly from a power loss / forced shutdown) — a rescan is needed.",
     err_idx_load:"Failed to load the index — a rescan is needed.",
+    err_not_result:"Only files from search results can be opened (search again).",
+    err_forbidden:"Refused: only requests from this computer's own page are accepted.",
     generic_fail:"Operation failed", open_fail:"Cannot open",
     pers_label:"Personalize", ttl_pers:"Learns your preferences locally from the files you open and ranks likelier ones higher (all on-device, never uploaded, never trains the model)",
     btn_forget:"Forget me", ttl_forget:"Clear everything learned locally (open history + interest vector)",
@@ -509,7 +515,7 @@ async function poll(){
       const p=s.progress, pct=p.total? Math.round(100*p.done/p.total):0;
       fill.style.width=pct+'%';
       document.getElementById('status').textContent=
-        t('st_building', {done:p.done, total:p.total, file:(p.file? '（'+p.file+'）':'')});
+        t(s.catchup? 'st_catchup' : 'st_building', {done:p.done, total:p.total, file:(p.file? '（'+p.file+'）':'')});
       document.getElementById('addBtn').disabled=true;
       document.getElementById('rescanBtn').disabled=true;
     }else{
@@ -532,14 +538,13 @@ async function poll(){
 }
 
 function highlight(text, terms){
-  let h = escapeHtml(text);
-  if(terms && terms.length){
-    const esc = terms.filter(x=>x).map(x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
-    if(esc.length){
-      try{ h = h.replace(new RegExp('('+esc.join('|')+')','gi'), '<mark>$1</mark>'); }catch(e){}
-    }
-  }
-  return h;
+  // match on the RAW text, then escape each piece: matching after escaping hit
+  // entity names (a term "amp"/"39" broke "&amp;"/"&#39;" into visible junk)
+  const raw = ''+(text==null?'':text);
+  const esc = (terms||[]).filter(x=>x).map(x=>x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+  if(!esc.length) return escapeHtml(raw);
+  let re; try{ re = new RegExp('('+esc.join('|')+')','gi'); }catch(e){ return escapeHtml(raw); }
+  return raw.split(re).map((p,i)=> i%2 ? '<mark>'+escapeHtml(p)+'</mark>' : escapeHtml(p)).join('');
 }
 function qKey(ev){
   if(ev.key==='Enter'){

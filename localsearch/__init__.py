@@ -1,7 +1,7 @@
 """localsearch -- a local, offline semantic + filename file-search backend engine.
 
-Validated config (bricks 1-4): bge-base embeddings + dense-weighted hybrid
-(dense + BM25, alpha=0.7) + Everything filename search; no reranker.
+Factory config: multilingual-e5-small embeddings + dense-weighted hybrid
+(dense + incremental BM25, alpha=0.7) + Everything filename search; no reranker.
 
     from localsearch import SearchEngine, Config
     eng = SearchEngine("my_index")

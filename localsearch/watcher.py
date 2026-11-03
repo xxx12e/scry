@@ -66,15 +66,21 @@ class _Scheduler(threading.Thread):
 
 
 class _Handler(FileSystemEventHandler):
-    def __init__(self, scheduler):
+    def __init__(self, scheduler, wanted=None):
         self.s = scheduler
+        self.wanted = wanted or (lambda p: True)
+
+    def _want(self, path):
+        """Index-worthy: a supported type AND not under a pruned dir (node_modules,
+        AppData, .git, ...). Deletions skip this check -- dropping is harmless."""
+        return is_supported(path) and self.wanted(path)
 
     def on_created(self, e):
-        if not e.is_directory and is_supported(e.src_path):
+        if not e.is_directory and self._want(e.src_path):
             self.s.schedule(e.src_path, _FILE)
 
     def on_modified(self, e):
-        if not e.is_directory and is_supported(e.src_path):
+        if not e.is_directory and self._want(e.src_path):
             self.s.schedule(e.src_path, _FILE)
 
     def on_deleted(self, e):
@@ -90,16 +96,17 @@ class _Handler(FileSystemEventHandler):
             self.s.schedule(e.src_path, _FILE)
         else:
             self.s.schedule(e.src_path, _TREE)
-        if e.dest_path and is_supported(e.dest_path):
+        if e.dest_path and self._want(e.dest_path):
             self.s.schedule(e.dest_path, _FILE)
 
 
 class Watcher:
     def __init__(self, engine, debounce_s):
         self.scheduler = _Scheduler(engine, debounce_s)
-        self.handler = _Handler(self.scheduler)
-        self.observer = Observer()
         self._dirs = []
+        self.handler = _Handler(
+            self.scheduler, lambda p: not engine.in_excluded_dir(p, self._dirs))
+        self.observer = Observer()
 
     def start(self, dirs):
         self.scheduler.start()

@@ -8,7 +8,9 @@ import subprocess
 import sys
 import threading
 import webbrowser
+from collections import OrderedDict
 from pathlib import Path
+from urllib.parse import urlparse
 
 from flask import Flask, request, jsonify, Response
 
@@ -20,6 +22,43 @@ log = logging.getLogger("localsearch.app")
 HERE = Path(__file__).resolve().parent
 WEB = resources.web_dir()
 
+# The API is bound to loopback, but a web page the user visits can still reach it
+# from inside their browser (cross-site POSTs; DNS rebinding, where an attacker's
+# hostname re-resolves to 127.0.0.1 and becomes "same-origin"). Rejecting any
+# request whose Host or Origin is not a loopback name closes both holes.
+_LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+_TOP_K_MAX = 200
+_SHOWN_MAX = 5000
+
+
+def _host_name(host):
+    """'127.0.0.1:8731' -> '127.0.0.1'; '[::1]:8731' -> '::1' (lowercased)."""
+    h = (host or "").strip().lower()
+    if h.startswith("["):
+        return h[1:h.find("]")] if "]" in h else h
+    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+
+
+def _is_local_request(host, origin):
+    if _host_name(host) not in _LOOPBACK:
+        return False
+    if origin is not None:          # browsers send Origin on every POST
+        try:
+            return (urlparse(origin).hostname or "") in _LOOPBACK
+        except ValueError:
+            return False
+    return True
+
+
+def _body():
+    """JSON request body as a dict (anything else -> {}), never raises."""
+    d = request.get_json(silent=True)
+    return d if isinstance(d, dict) else {}
+
+
+def _norm_path(p):
+    return os.path.normcase(os.path.abspath(str(p)))
+
 
 class AppState:
     def __init__(self, engine, index_dir):
@@ -30,6 +69,7 @@ class AppState:
         self.settings_file = self.index_dir / "settings.json"
         self.settings = self._load_settings()
         self.building = False
+        self.catchup = False          # the running build is the startup catch-up scan
         self.build_lock = threading.Lock()
         self.cancel = False
         self.last_build = None
@@ -40,6 +80,23 @@ class AppState:
         self.dlc = {"id": None, "done": 0, "total": 0, "status": "idle", "error": ""}
         self.dlc_lock = threading.Lock()
         self.restart_required = False
+        # paths recently returned by /api/search: /api/open only launches these,
+        # so the API can never be used to run an arbitrary file on the machine.
+        self.shown = OrderedDict()
+        self.shown_lock = threading.Lock()
+
+    def remember_shown(self, paths):
+        with self.shown_lock:
+            for p in paths:
+                k = _norm_path(p)
+                self.shown[k] = True
+                self.shown.move_to_end(k)
+            while len(self.shown) > _SHOWN_MAX:
+                self.shown.popitem(last=False)
+
+    def was_shown(self, path):
+        with self.shown_lock:
+            return _norm_path(path) in self.shown
 
     def _load_folders(self):
         try:
@@ -116,16 +173,32 @@ def create_app(index_dir, config=None):
     state.resume_watch()
 
     def _warm():
+        # BM25 needs no model: build it while the model loads, not after
+        prep = threading.Thread(target=engine.prepare_index, daemon=True)
+        prep.start()
         ok = engine.warmup()
-        engine.prepare_index()
         if ok:
             state.model_ready = True
+            # Catch-up scan: the watcher only sees changes while the app runs, so
+            # files added/edited/deleted while it was closed (and an index that was
+            # moved aside after a model change) are reconciled now. It is a diff --
+            # unchanged files are skipped by mtime+size and nothing is rewritten.
+            if state.settings.get("startup_rescan", True):
+                paths = [f for f in state.folders if os.path.isdir(f)]
+                if paths:
+                    _start_build(paths, register=False, catchup=True)
         else:
             state.last_error = "AI 模型加载失败，语义搜索不可用（详见控制台/engine.log）。"
-    threading.Thread(target=_warm, daemon=True).start()
 
     ws_available = winsearch.available()
     app = Flask(__name__)
+
+    @app.before_request
+    def _local_only():
+        if not _is_local_request(request.host, request.headers.get("Origin")):
+            log.warning("rejected non-local request: host=%r origin=%r path=%s",
+                        request.host, request.headers.get("Origin"), request.path)
+            return jsonify(ok=False, code="forbidden", error="Local access only."), 403
 
     @app.get("/")
     def home():
@@ -135,7 +208,8 @@ def create_app(index_dir, config=None):
     def status():
         s = engine.stats()
         return jsonify(files=s["files"], chunks=s["chunks"], model=engine.cfg.model_name,
-                       building=state.building, progress=state.progress, folders=state.folders,
+                       building=state.building, catchup=state.catchup,
+                       progress=state.progress, folders=state.folders,
                        last_build=state.last_build, ws_available=ws_available,
                        model_ready=state.model_ready, last_error=state.last_error,
                        last_error_detail=state.last_error_detail, index_error=engine.load_error,
@@ -151,7 +225,7 @@ def create_app(index_dir, config=None):
     @app.post("/api/personalize")
     def personalize():
         # toggle local, training-free personalization on/off
-        on = bool((request.get_json(silent=True) or {}).get("enabled", True))
+        on = bool(_body().get("enabled", True))
         engine.personalizer.set_enabled(on)
         return jsonify(ok=True, enabled=engine.personalizer.enabled)
 
@@ -170,7 +244,7 @@ def create_app(index_dir, config=None):
         # toggle image OCR (Windows built-in engine); images index on next rescan.
         # Refuse mid-build: flipping the supported-set while a scan is parsing would
         # record in-flight images as empty and (unchanged mtime) never retry them.
-        on = bool((request.get_json(silent=True) or {}).get("enabled", False))
+        on = bool(_body().get("enabled", False))
         with state.build_lock:
             if state.building:
                 return jsonify(ok=False, code="busy",
@@ -189,7 +263,7 @@ def create_app(index_dir, config=None):
     @app.post("/api/dlc/install")
     def dlc_install():
         from . import dlc as _dlc
-        pid = (request.get_json(silent=True) or {}).get("id", "")
+        pid = _body().get("id", "")
         with state.dlc_lock:
             if state.dlc["status"] == "downloading":
                 return jsonify(ok=False, error="A download is already in progress."), 409
@@ -213,7 +287,7 @@ def create_app(index_dir, config=None):
     @app.post("/api/dlc/uninstall")
     def dlc_uninstall():
         from . import dlc as _dlc
-        pid = (request.get_json(silent=True) or {}).get("id", "")
+        pid = _body().get("id", "")
         removed = _dlc.uninstall(str(state.index_dir), pid)
         if removed:
             p = _dlc._by_id(pid)
@@ -239,12 +313,13 @@ def create_app(index_dir, config=None):
             log.warning("folder dialog failed (type the path instead): %s", e)
             return jsonify(path="", error=str(e))
 
-    def _start_build(paths, register):
+    def _start_build(paths, register, catchup=False):
         """Background full-or-diff build (the engine skips unchanged files itself)."""
         with state.build_lock:
             if state.building:
                 return False
             state.building = True
+            state.catchup = catchup
         state.cancel = False
         state.last_error = ""
         state.last_error_detail = ""
@@ -258,8 +333,9 @@ def create_app(index_dir, config=None):
                                                 cancel_check=lambda: state.cancel)
                 engine.load_error = ""
                 if register:
+                    known = {_norm_path(f) for f in state.folders}
                     for p in paths:
-                        if p not in state.folders:
+                        if _norm_path(p) not in known:
                             state.folders.append(p)
                     state._save_folders()
                 engine.start_watching([f for f in state.folders if os.path.isdir(f)])
@@ -268,6 +344,7 @@ def create_app(index_dir, config=None):
                 state.last_error = "build_failed"
                 state.last_error_detail = str(e)
             finally:
+                state.catchup = False
                 state.building = False
 
         threading.Thread(target=worker, daemon=True).start()
@@ -275,9 +352,10 @@ def create_app(index_dir, config=None):
 
     @app.post("/api/add_folder")
     def add_folder():
-        path = (request.get_json(silent=True) or {}).get("path", "").strip()
+        path = str(_body().get("path") or "").strip()
         if not path or not os.path.isdir(path):
             return jsonify(ok=False, code="bad_folder", error="Not a valid folder."), 400
+        path = os.path.abspath(path)        # one spelling per folder (no dup chips)
         if not _start_build([path], register=True):
             return jsonify(ok=False, code="busy", error="Already indexing, please wait."), 409
         return jsonify(ok=True, started=True)
@@ -285,12 +363,15 @@ def create_app(index_dir, config=None):
     @app.post("/api/remove_folder")
     def remove_folder():
         """Un-control a folder: drop it and purge its indexed entries."""
-        path = (request.get_json(silent=True) or {}).get("path", "").strip()
+        path = str(_body().get("path") or "").strip()
         with state.build_lock:
             if state.building:
                 return jsonify(ok=False, code="busy", error="Busy indexing."), 409
-            if path not in state.folders:
+            match = next((f for f in state.folders if f == path
+                          or (path and _norm_path(f) == _norm_path(path))), None)
+            if match is None:
                 return jsonify(ok=False, code="not_controlled", error="Not in the controlled list."), 400
+            path = match
             state.folders.remove(path)
             state._save_folders()
             n = engine.remove_tree(path, persist=True)
@@ -313,10 +394,13 @@ def create_app(index_dir, config=None):
 
     @app.post("/api/search")
     def search():
-        d = request.get_json(silent=True) or {}
-        q = d.get("query", "").strip()
+        d = _body()
+        q = str(d.get("query") or "").strip()
         mode = d.get("mode", "semantic")
-        k = int(d.get("top_k", 20))
+        try:
+            k = min(max(int(d.get("top_k", 20)), 1), _TOP_K_MAX)
+        except (TypeError, ValueError):
+            k = 20
         scope = (d.get("scope") or "").strip() or None
         if not q:
             return jsonify(results=[])
@@ -339,15 +423,20 @@ def create_app(index_dir, config=None):
             hits = engine.search_semantic(q, top_k=k)
             res = [_result(h.path, snippet=h.snippet or _snippet(h.chunk_text),
                            score=round(h.score, 3), terms=h.terms, personal=h.personal) for h in hits]
-        return jsonify(results=[r for r in res if r is not None])
+        res = [r for r in res if r is not None]
+        state.remember_shown(r["path"] for r in res)
+        return jsonify(results=res)
 
     @app.post("/api/open")
     def open_path():
-        d = request.get_json(silent=True) or {}
-        path = d.get("path", "")
+        d = _body()
+        path = str(d.get("path") or "")
         reveal = bool(d.get("reveal", False))
-        if not os.path.exists(path):
+        if not path or not os.path.exists(path):
             return jsonify(ok=False, code="no_file", error="File no longer exists."), 404
+        if not state.was_shown(path):
+            return jsonify(ok=False, code="not_result",
+                           error="Only files from search results can be opened."), 403
         engine.record_open(path)        # local behavioral profile (training-free)
         if os.environ.get("LOCALSEARCH_NO_LAUNCH"):
             return jsonify(ok=True, launched=False)
@@ -360,6 +449,8 @@ def create_app(index_dir, config=None):
         except Exception as e:
             return jsonify(ok=False, error=str(e)), 500
 
+    # started last: _warm() may kick off the catch-up scan via _start_build
+    threading.Thread(target=_warm, daemon=True).start()
     return app, engine, state
 
 

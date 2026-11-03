@@ -1,4 +1,4 @@
-"""Embedding model wrapper (bge-base by default). Loaded once and kept resident."""
+"""Embedding model wrapper (multilingual-e5-small by default). Loaded once and kept resident."""
 import logging
 import numpy as np
 
