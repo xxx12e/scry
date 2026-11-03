@@ -22,17 +22,17 @@ THEMES = {
                  ink="#f0f6fc", muted="#9198a1", line="#3d444d"),
 }
 TEXT = {
-    "en": dict(title="Finding the right file — bundled model, v1.4 settings vs. now",
-               sub="Bilingual eval set (60 zh/en docs, 102 queries). Share of queries whose right file is ranked…",
+    "en": dict(title="Scry Bilingual Retrieval Eval — v1.4 vs. now",
+               sub="Share of queries with the right file at #1 (or in the Top 5) · 60 zh/en docs, 102 queries · bundled 235 MB model",
                before="v1.4", after="now", same="unchanged",
-               rows=["Cross-language · #1", "Cross-language · in the top 5", "Same-language paraphrase · #1",
+               rows=["Cross-language · #1", "Cross-language · Top 5", "Same-language paraphrase · #1",
                      "All 102 queries · #1", "Keywords & exact phrases · #1"],
                font="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"),
-    "zh": dict(title="找到对的那个文件——内置模型，v1.4 设置 vs 现在",
-               sub="中英双语评测集（60 篇中英文档，102 条查询）。目标文件排在……的查询占比",
+    "zh": dict(title="Scry 中英双语检索评测——v1.4 vs 现在",
+               sub="目标文件排在 #1（或 Top 5）的查询占比 · 60 篇中英文档、102 条查询 · 内置 235 MB 模型",
                before="v1.4", after="现在", same="不变",
-               rows=["跨语言 · 排第一", "跨语言 · 进前五", "同语言改写 · 排第一",
-                     "全部 102 条查询 · 排第一", "关键词与精确短语 · 排第一"],
+               rows=["跨语言 · #1", "跨语言 · Top 5", "同语言改写 · #1",
+                     "全部 102 条查询 · #1", "关键词与精确短语 · #1"],
                font="'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', -apple-system, 'Segoe UI', sans-serif"),
 }
 

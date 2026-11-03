@@ -4,7 +4,7 @@
 
 # 🔮 Scry
 
-### Everything finds filenames. **Scry finds meaning.**
+### Find your files by **meaning**, with Scry.
 
 Instant, whole‑disk **semantic** file search that runs **100% offline**.
 Type what you *mean* — not the exact words — and find the file. Your files never leave your machine.
@@ -23,14 +23,16 @@ Type what you *mean* — not the exact words — and find the file. Your files n
 
 ---
 
-## Measured, not claimed
+## Benchmarks
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/eval-en-dark.svg">
-  <img src="docs/img/eval-en-light.svg" width="820" alt="Bilingual eval, bundled model, v1.4 settings vs now: cross-language right file at #1 13% to 77%, in the top 5 43% to 100%; same-language paraphrase #1 77% to 90%; all 102 queries #1 68% to 90%; keywords and exact phrases unchanged at 100%.">
+  <img src="docs/img/eval-en-light.svg" width="820" alt="Scry Bilingual Retrieval Eval, v1.4 vs now: cross-language #1 from 13% to 77%, cross-language Top 5 from 43% to 100%, same-language paraphrase #1 from 77% to 90%, all 102 queries #1 from 68% to 90%, keywords and exact phrases unchanged at 100%.">
 </picture>
 
-**Search in Chinese, find the English file — now it really does.** Multilingual models quietly favor text in the query's own language, so in a mixed folder the right English file used to sit below Chinese look‑alikes: it ranked **#1 for only 13%** of cross‑language queries. Scry now corrects that bias before ranking — **77% land at #1, and every one is in the top 5.** Checked query by query: **30 of 102 rank higher, none lower** — keyword, exact‑phrase and single‑language search included.
+**On the Scry Bilingual Retrieval Eval, Scry puts the right file at #1 for 90% of queries — cross‑language #1 went from 13% to 77%, and Top 5 is 100%.**
+
+Multilingual models quietly favor text in the query's own language, so in a mixed folder the right English file used to sit below Chinese look‑alikes; Scry now corrects that bias before ranking. Query by query: **30 of 102 rank higher, none lower** — keyword, exact‑phrase and single‑language search included.
 
 | On a plain 4‑core laptop‑class CPU, no GPU | |
 |---|---|
@@ -59,7 +61,7 @@ A real semantic engine, not a keyword matcher with a marketing label — and its
 | ⚡ **23 ms** to results over **100,000 chunks — on a plain 4‑core CPU** | measured end‑to‑end with the real model (ONNX; 32 ms with torch); the best‑sentence snippets stream in right after |
 | 🌐 **~0.1 s** whole‑disk semantic results with a GPU (~1.5 s on a 4‑core CPU the first time; cached after) | **zero pre‑indexing** — rides the OS content index |
 | 🪶 **118M params · 235 MB** multilingual model | vs the **4–8 GB** local LLMs other "AI search" tools ship |
-| 🌍 **100+ languages · cross‑language** | search 中文 → find English files: on our bilingual eval set the right file is **#1 for 77%** of cross‑language queries and **in the top 5 for all** (language‑bias correction; 13% / 43% without it) |
+| 🌍 **100+ languages · cross‑language** | search 中文 → find English files: on the Scry Bilingual Retrieval Eval, cross‑language **#1 77%, Top 5 100%** (13% / 43% before the language‑bias correction) |
 | 🔁 **~35 s** to index 100k files on a GPU, **~0.1 s** to re‑scan | incremental diff measured **235× faster** than a full scan; ~20 chunks/s on a 4‑core CPU |
 | 🎯 matches paraphrases with **zero shared words** | exact FAISS + BM25 hybrid, fp16 — half the RAM/disk |
 | 🔒 **0 bytes** leave your machine | fully offline · binds `127.0.0.1` · no account, no telemetry |

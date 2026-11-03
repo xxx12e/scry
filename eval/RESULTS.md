@@ -1,6 +1,6 @@
-# Scry — evaluation results
+# Scry Bilingual Retrieval Eval (v1) — results
 
-> **中文摘要：** 在自带的中英双语评测集（60 篇文档、102 条查询）上，用内置的 235 MB 模型：跨语言查询「目标文件排第一」从 **13% → 77%**、「进前五」从 **43% → 100%**，总体 MRR **0.746 → 0.948**；逐条比对，**30 条查询排名上升、0 条下降**；关键词与精确短语查询保持 100%，纯中文语料同样没有任何查询变差。普通 4 核 CPU 上，10 万文本块的深度搜索从查询到出结果 **23 ms**（端到端，真实模型）。评测集小、由人工编写——请把它当成"明显更好"的证据，而不是排行榜成绩；所有原始结果都在 `eval/results/`，一条命令即可复现。
+> **中文摘要：** 在自带的中英双语评测集（60 篇文档、102 条查询）上，用内置的 235 MB 模型：跨语言查询的 **#1 从 13% → 77%**、**Top 5 从 43% → 100%**，总体 MRR **0.746 → 0.948**；逐条比对，**30 条查询排名上升、0 条下降**；关键词与精确短语查询保持 100%，纯中文语料同样没有任何查询变差。普通 4 核 CPU 上，10 万文本块的深度搜索从查询到出结果 **23 ms**（端到端，真实模型）。评测集小、由人工编写——请把它当成"明显更好"的证据，而不是排行榜成绩；所有原始结果都在 `eval/results/`，一条命令即可复现。
 
 Everything below was produced by the scripts in this repo; the raw outputs are in
 [`results/`](results/). Numbers are for the current code (the next release) — the v1.4
@@ -36,6 +36,8 @@ on your own folders before trusting any absolute number.
 | keywords (30) | 1.000 → 1.000 | 1.000 → 1.000 | 1.000 → 1.000 |
 | exact phrases (12) | 1.000 → 1.000 | 1.000 → 1.000 | 1.000 → 1.000 |
 | **all (102)** | **0.676 → 0.902** | **0.833 → 1.000** | **0.746 → 0.948** |
+
+R@1 = share of queries with the right file at **#1**; R@5 = in the **Top 5**; MRR = mean of 1/rank (1.0 = always #1).
 
 Raw: [`e5small_v1.4.json`](results/e5small_v1.4.json), [`e5small_now.json`](results/e5small_now.json).
 The ONNX backend gives identical results to torch (same vectors, min cosine 0.99999994).
