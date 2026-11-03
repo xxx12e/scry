@@ -72,6 +72,7 @@ class AppState:
         self.building = False
         self.catchup = False          # the running build is the startup catch-up scan
         self.warm_done = threading.Event()   # model warm-up (and catch-up kick-off) finished
+        self.show_window = None              # set by the desktop shell (raise + focus)
         self.build_lock = threading.Lock()
         self.cancel = False
         self.last_build = None
@@ -499,6 +500,14 @@ def create_app(index_dir, config=None):
         state.remember_shown(r["path"] for r in res)
         return jsonify(results=res, snip_id=sid, similar_to=name)
 
+    @app.post("/api/show")
+    def show():
+        """A second launch asks the running desktop window to come forward."""
+        if state.show_window is None:
+            return jsonify(ok=False)
+        state.show_window()
+        return jsonify(ok=True)
+
     @app.post("/api/snippets")
     def snippets():
         """Second half of a search: the semantic best-sentence snippets."""
@@ -580,6 +589,9 @@ def main():
     ap.add_argument("--port", type=int, default=8731)
     ap.add_argument("--index-dir", default=str(Path.home() / ".localsearch_index"))
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--window", action="store_true",
+                    help="native window + global hotkey + tray (Windows; needs pywebview)")
+    ap.add_argument("--hotkey", default=None, help='global hotkey, default "ctrl+alt+space"')
     args = ap.parse_args()
 
     from .instance import InstanceLock, free_port
@@ -590,7 +602,7 @@ def main():
         url = lock.running_url() or f"http://127.0.0.1:{args.port}"
         print(f"Scry is already running -> {url}")
         print("已经在运行了，正在打开它的页面 / opening the running instance.")
-        if not args.no_browser:
+        if not args.no_browser and not _ask_to_show(url):
             webbrowser.open(url)
         return
     port = free_port(args.port)
@@ -605,13 +617,34 @@ def main():
     print("  Fully local. Nothing is sent over the network.")
     print("  Press Ctrl+C (or close this window) to stop.")
     print("=" * 64)
-    if not args.no_browser:
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    serve = lambda: app.run(host="127.0.0.1", port=port, threaded=True)
+    want_window = args.window or bool(state.settings.get("desktop"))
     try:
-        app.run(host="127.0.0.1", port=port, threaded=True)
+        if want_window:
+            from . import desktop
+            hotkey = args.hotkey or state.settings.get("hotkey") or "ctrl+alt+space"
+            ready = lambda show: setattr(state, "show_window", show)
+            if desktop.run(url, serve, close_once, hotkey=hotkey, on_ready=ready):
+                return
+            print("  (native window unavailable -- pip install pywebview; using the browser)")
+        if not args.no_browser:
+            threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+        serve()
     finally:
         close_once()
         lock.release()
+
+
+def _ask_to_show(url):
+    """Ask a running desktop-mode instance to raise its window."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(url + "/api/show", data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=2) as r:
+            return json.loads(r.read().decode("utf-8")).get("ok") is True
+    except Exception:
+        return False
 
 
 if __name__ == "__main__":
