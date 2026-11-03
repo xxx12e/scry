@@ -40,7 +40,7 @@ A real semantic engine, not a keyword matcher with a marketing label — and its
 | ⚡ **~15–35 ms** to results over **100,000 chunks — on a plain 4‑core CPU** | query embed 5–21 ms + exact FAISS 6 ms + BM25 0.3 ms; the best‑sentence snippets stream in right after |
 | 🌐 **~0.1 s** whole‑disk semantic results | **zero pre‑indexing** — rides the OS content index |
 | 🪶 **118M params · 235 MB** multilingual model | vs the **4–8 GB** local LLMs other "AI search" tools ship |
-| 🌍 **100+ languages · cross‑language** | search 中文 → find English files: measured **1/10 → 10/10** vs an English‑only model |
+| 🌍 **100+ languages · cross‑language** | search 中文 → find English files: on our bilingual eval set the right file is **#1 for 77%** of cross‑language queries and **in the top 5 for all** (language‑bias correction; 13% / 43% without it) |
 | 🔁 **~35 s** to index 100k files on a GPU, **~0.1 s** to re‑scan | incremental diff measured **235× faster** than a full scan; ~20 chunks/s on a 4‑core CPU |
 | 🎯 matches paraphrases with **zero shared words** | exact FAISS + BM25 hybrid, fp16 — half the RAM/disk |
 | 🔒 **0 bytes** leave your machine | fully offline · binds `127.0.0.1` · no account, no telemetry |
@@ -65,7 +65,7 @@ A real semantic engine, not a keyword matcher with a marketing label — and its
 
 Plus: **bilingual UI (中文 / English, one‑click toggle)**, keyboard‑driven (`Enter` to search, `↑/↓` to move, `Enter` to open), live‑highlighted snippets that show *why* a file matched, and a portable build that runs on any Windows PC with **no Python install**.
 
-**Optional add‑on packs (DLC).** The base stays tiny and 100% offline; heavier extras (starting with a larger multilingual model) download **only when you click**, from this repo's releases, SHA‑256‑verified — see **Add‑ons** in the app.
+**Optional add‑on packs (DLC).** The base stays tiny and 100% offline; heavier extras — a larger multilingual model, **search images by description** ("sunset at the beach", no text in the photo needed), and **ask your files** (a small local model answers with clickable sources) — download **only when you click**, from this repo's releases, SHA‑256‑verified — see **Add‑ons** in the app.
 
 **Read text inside images (opt‑in OCR).** Flip on OCR in Control mode and Scry reads the text in your **screenshots, scans, and photos** with the **Windows built‑in OCR engine** — so a screenshotted receipt or a scanned contract becomes searchable **by meaning**, in whatever languages your Windows has OCR packs for (English + 中文 out of the box on most PCs). It downloads **no model** (Windows provides the engine and language data), stays **100% offline**, adds only ~4 MB to the app, and is **off by default** — turn it on and rescan. It's for *finding*, not perfect transcription: stylized or low‑res text can come out noisy, but semantic search shrugs that off.
 
@@ -129,7 +129,16 @@ or double‑click **`run.bat`** (Windows). Packaging recipe: [`localsearch/READM
 - **Instant mode:** queries the OS content index via the `Search.CollatorDSO` provider, then embeds and re‑ranks the candidates — global content search with **zero pre‑indexing**.
 - **Robust by design:** crash‑durable index writes (fsync + generation‑stamped, torn saves detected and quarantined), save‑on‑exit, live progress and search *during* indexing, and a single‑thread watcher that survives bulk file copies.
 
-Scry is **multilingual** — one model covering 100+ languages, so you can search in one language and find files written in another (Chinese and English are both first‑class). Cross‑language retrieval is strong but not magic: a query can occasionally lose to a topically‑adjacent same‑language file. The promise isn't to beat a datacenter on a benchmark — it's cloud‑grade *convenience* with **zero** privacy cost.
+Scry is **multilingual** — one model covering 100+ languages, so you can search in one language and find files written in another (Chinese and English are both first‑class). Multilingual embedders score same‑language text higher across the board, so on a mixed folder a Chinese query used to bury the English file it was about; Scry now corrects that bias before ranking (see `scripts/eval.py` — on the bundled bilingual eval set overall MRR rose 0.746 → 0.948, with no loss on single‑language or exact‑phrase queries). It's a small, hand‑written set: read it as "much better", not as a benchmark. The promise isn't to beat a datacenter on a benchmark — it's cloud‑grade *convenience* with **zero** privacy cost.
+
+## More in this version
+
+- **Never downloads your cloud files by accident** — OneDrive/Dropbox "online‑only" placeholders are skipped (reading them would make the sync client download them).
+- **Page‑level results** — "p. 12" on PDF/slide hits, and *Open at p. 12*.
+- **Search as you type** in Deep/Filename modes; weakly related results are dimmed under a divider instead of padding the list.
+- **"Couldn't read" report** — after a scan Scry says what it skipped and how to fix it (e.g. *7 scanned PDFs: turn on OCR*).
+- **Desktop mode** (`--window`): native window, global hotkey **Ctrl+Alt+Space**, tray icon.
+- **Torch‑free build** — same embeddings via ONNX Runtime, about half the download, model ready in ~1.5 s; and a Microsoft Store (MSIX) route for a signed, auto‑updating install — see [`packaging/README.md`](packaging/README.md).
 
 ## Project layout
 

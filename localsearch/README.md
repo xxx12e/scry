@@ -46,6 +46,12 @@ dropped. A fresh `SearchEngine(same_dir)` loads from disk — no rebuild.
 | `chunker.py` | CJK‑aware sentence chunking with a hard size cap (no chunk the model would truncate) + BM25 tokenizer (Unicode words, case/diacritic‑folded, + CJK bigrams) |
 | `embedder.py` | e5 wrapper (resident; query/passage prefixing; fp16‑checkpoint safe) |
 | `index.py` | `DualIndex`: fp16 FAISS dense (exact) + BM25 + file→chunk map + crash‑durable persistence |
+| `formats.py` | OFD (GB/T 33190), legacy .doc/.xls/.ppt (+ WPS .wps/.et/.dps), EPUB, ODF, EML |
+| `query.py` | search operators (`type:` `in:` `after:` `before:` `time:`) + zh/en time phrases |
+| `clip.py` | image search by description: ONNX CLIP pack + fp16 image index (add‑on) |
+| `qa.py` | ask your files: retrieval + local GGUF model, answers cite sources (add‑on) |
+| `desktop.py` | optional native window, global hotkey, tray (`--window`) |
+| `instance.py` | one running app per index dir (OS file lock) |
 | `bm25.py` | incremental Okapi BM25 (scores identical to `rank_bm25`): numpy CSR base + live delta + tombstones — queries touch only their terms' postings, edits never refit |
 | `search.py` | hybrid fusion → files + best‑sentence snippets; `es.exe` filename search |
 | `winsearch.py` | Windows Search content index (`Search.CollatorDSO`) for instant global mode |
