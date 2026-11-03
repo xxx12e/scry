@@ -88,9 +88,20 @@ def main():
     ap.add_argument("--data", default=str(ROOT / "eval" / "scry_eval_v1.json"))
     ap.add_argument("--alphas", help="comma list, e.g. 0.5,0.7,0.9 (default: Config)")
     ap.add_argument("--balance", help="lang_balance values, comma list (default: Config)")
+    ap.add_argument("--keep-en", type=int, default=None,
+                    help="stress test: keep only the first N English topics (0 = Chinese-only corpus)")
+    ap.add_argument("--qlang", choices=["zh", "en"], help="only queries in this language")
     ap.add_argument("--json", help="write the full result here")
     a = ap.parse_args()
     data = json.loads(Path(a.data).read_text(encoding="utf-8"))
+    if a.keep_en is not None:          # language-imbalanced / monolingual corpora
+        en = [t for t, d in data["docs"].items() if d["lang"] == "en" and "__" not in t][:a.keep_en]
+        keep = {t for t, d in data["docs"].items() if d["lang"] != "en"} | \
+               {t for t in data["docs"] if t.split("__")[0] in en}
+        data = {"docs": {k: v for k, v in data["docs"].items() if k in keep},
+                "queries": [q for q in data["queries"] if q["rel"] in keep]}
+    if a.qlang:
+        data = {"docs": data["docs"], "queries": [q for q in data["queries"] if q["qlang"] == a.qlang]}
     from localsearch import Config
     alphas = tuple(float(x) for x in a.alphas.split(",")) if a.alphas else (Config.alpha,)
     bals = (tuple(float(x) for x in a.balance.split(",")) if a.balance
@@ -105,7 +116,8 @@ def main():
             by[r["kind"]].append(r)
             by["q:" + r["qlang"]].append(r)
         for k in ("para", "cross", "kw", "exact", "q:zh", "q:en"):
-            print(f"   {k:6s} {metrics(by[k])}")
+            if by[k]:                      # a subset may lack a group (e.g. --qlang zh)
+                print(f"   {k:6s} {metrics(by[k])}")
         miss = [r for r in rows if r["rank"] != 1 and r["kind"] != "cross"]
         if miss:
             print("   non-cross not at rank 1:", "; ".join(f"{r['q']} -> {r['rank']}" for r in miss[:10]))

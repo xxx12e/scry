@@ -23,6 +23,25 @@ Type what you *mean* — not the exact words — and find the file. Your files n
 
 ---
 
+## Measured, not claimed
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/eval-en-dark.svg">
+  <img src="docs/img/eval-en-light.svg" width="820" alt="Bilingual eval, bundled model, v1.4 settings vs now: cross-language right file at #1 13% to 77%, in the top 5 43% to 100%; same-language paraphrase #1 77% to 90%; all 102 queries #1 68% to 90%; keywords and exact phrases unchanged at 100%.">
+</picture>
+
+**Search in Chinese, find the English file — now it really does.** Multilingual models quietly favor text in the query's own language, so in a mixed folder the right English file used to sit below Chinese look‑alikes: it ranked **#1 for only 13%** of cross‑language queries. Scry now corrects that bias before ranking — **77% land at #1, and every one is in the top 5.** Checked query by query: **30 of 102 rank higher, none lower** — keyword, exact‑phrase and single‑language search included.
+
+| On a plain 4‑core laptop‑class CPU, no GPU | |
+|---|---|
+| ⚡ **23 ms** from query to ranked files over **100,000 chunks** | end‑to‑end with the real model (ONNX · 32 ms with torch); best‑sentence snippets stream in right after |
+| 🧠 **0.746 → 0.948** MRR | the bundled **235 MB** model now scores within 0.006 of the 520 MB add‑on model |
+| 🚀 model ready in **~2 s**, was **~8 s** | ONNX Runtime — identical vectors (cosine 0.99999994), no PyTorch needed |
+| 🔎 BM25 **121 ms → 0.3 ms** per query | incremental inverted index, identical scores; no refit when a file changes |
+| 📦 about **half the size** on disk | torch‑free build: 516 MB vs 1,026 MB for v1.4 |
+
+<sub>How we measured — and how to check us: the eval set (60 hand‑written zh/en documents with look‑alike decoys, 102 queries), every raw result and the benchmark scripts are in [`eval/`](eval/RESULTS.md); `python scripts/eval.py --model models/embed` re‑runs it. It's small and written by us, so read it as "a lot better", not as a leaderboard score — then try it on your own folders. Figures are for the current code; the v1.4 download predates them.</sub>
+
 ## Search your files by what they *mean*
 
 You remember *what a file was about*. You don't remember its name, or which of five drives it's on, or whether you wrote "invoice" or "发票" or "billing". Keyword search fails you exactly there.
@@ -37,8 +56,8 @@ A real semantic engine, not a keyword matcher with a marketing label — and its
 
 | | |
 |---|---|
-| ⚡ **~15–35 ms** to results over **100,000 chunks — on a plain 4‑core CPU** | query embed 5–21 ms + exact FAISS 6 ms + BM25 0.3 ms; the best‑sentence snippets stream in right after |
-| 🌐 **~0.1 s** whole‑disk semantic results | **zero pre‑indexing** — rides the OS content index |
+| ⚡ **23 ms** to results over **100,000 chunks — on a plain 4‑core CPU** | measured end‑to‑end with the real model (ONNX; 32 ms with torch); the best‑sentence snippets stream in right after |
+| 🌐 **~0.1 s** whole‑disk semantic results with a GPU (~1.5 s on a 4‑core CPU the first time; cached after) | **zero pre‑indexing** — rides the OS content index |
 | 🪶 **118M params · 235 MB** multilingual model | vs the **4–8 GB** local LLMs other "AI search" tools ship |
 | 🌍 **100+ languages · cross‑language** | search 中文 → find English files: on our bilingual eval set the right file is **#1 for 77%** of cross‑language queries and **in the top 5 for all** (language‑bias correction; 13% / 43% without it) |
 | 🔁 **~35 s** to index 100k files on a GPU, **~0.1 s** to re‑scan | incremental diff measured **235× faster** than a full scan; ~20 chunks/s on a 4‑core CPU |
@@ -47,7 +66,7 @@ A real semantic engine, not a keyword matcher with a marketing label — and its
 | 📄 **21 formats** — Office old & new, **WPS**, **OFD e‑invoices**, PDF (scanned pages too, with OCR), EPUB, ODF, e‑mail | single `.exe` · optional add‑on packs (DLC) |
 | 🖼️ **Reads images too** — opt‑in OCR | screenshots / scans / photos searchable **by meaning** · Windows built‑in engine · **no model download** |
 
-<sub>CPU figures measured with the shipped model on a 4‑core 2.1 GHz CPU, no GPU: results in ~15–35 ms at 100k chunks; the semantic snippets for 20 results follow in ~0.4–1.2 s. Indexing speed is the one place a GPU matters.</sub>
+<sub>CPU figures measured with the shipped model on a 4‑core 2.1 GHz CPU, no GPU: results in 23 ms at 100k chunks (end to end); the semantic snippets for 20 results follow in ~0.4–1.5 s depending on text length. Indexing speed is where a GPU matters most. Details: [`eval/RESULTS.md`](eval/RESULTS.md).</sub>
 
 ## Three ways to search, one box
 
