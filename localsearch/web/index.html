@@ -53,6 +53,8 @@
   .res .snip { font-size:13.5px; color:var(--snipfg); background:var(--soft); border-radius:6px; padding:8px 10px; transition:opacity .25s; }
   .res .snip.pending { opacity:.6; }
   .res.low { opacity:.55; }
+  a.cite { color:var(--accent); text-decoration:none; font-size:12.5px; margin-right:6px; cursor:pointer; }
+  a.cite:hover { text-decoration:underline; }
   .res .thumb { display:block; max-width:240px; max-height:180px; border-radius:6px; margin:6px 0; border:1px solid var(--line); }
   .lowsep { color:var(--mut); font-size:12px; margin:14px 2px 8px; border-top:1px dashed var(--line); padding-top:8px; }
   .res .acts { margin-top:8px; display:flex; gap:8px; }
@@ -140,6 +142,7 @@
         <option value="50" data-i18n="topk_50">50 条</option>
       </select>
       <button class="primary" onclick="doSearch()" data-i18n="btn_search">搜索</button>
+      <button id="askBtn" style="display:none" onclick="askQuestion()" data-i18n="btn_ask" data-i18n-title="ttl_ask">问一问</button>
     </div>
     <div class="note" id="fltRow" style="margin-top:8px; display:none; align-items:center; gap:6px; flex-wrap:wrap"></div>
     <div class="note" style="margin-top:6px" data-i18n-html="kbd_hint"></div>
@@ -154,6 +157,12 @@
       <span style="font-size:12px; color:var(--mut)" data-i18n="pers_hint">越用越懂你 · 全程本地</span>
     </div>
     <div class="err" id="searchErr"></div>
+  </div>
+
+  <div class="card" id="answerCard" style="display:none">
+    <div style="font-weight:500" data-i18n="ans_title">回答</div>
+    <div id="answerText" class="note" style="white-space:pre-wrap; color:var(--fg); font-size:14.5px; margin-top:6px"></div>
+    <div id="answerSrc" class="note"></div>
   </div>
 
   <div id="results"></div>
@@ -228,6 +237,9 @@ const I18N = {
     flt_time:"修改于 {start} ~ {end}", ttl_rmflt:"去掉这个筛选",
     flt_suggest:"只看「{phrase}」修改的文件？（{start} ~ {end}）", flt_unknown:"没看懂的筛选（已当作普通文字）：{u}",
     fn_windows:"没有找到 Everything：已改用 Windows 搜索索引查文件名（只覆盖已索引的位置，通常是用户文件夹；装上 Everything 即可全盘秒搜）",
+    btn_ask:"问一问", ttl_ask:"让本地模型读相关文件后直接回答（附出处，全程本地）", ans_title:"回答",
+    ans_wait:"正在读相关文件并作答…（本地模型，CPU 上可能要十几秒）", ans_sources:"出处：",
+    err_no_llm:"还没有安装「本地问答」扩展包。", err_no_sources:"深度索引里没有找到相关内容。", err_no_question:"请先输入问题。",
     btn_similar:"找相似", ttl_similar:"找出内容与它相近的其他文件（基于深度索引）",
     sim_note:"与「{name}」内容相似的文件", err_no_similar:"深度索引里没有相似的文件（先把相关文件夹加入「深度语义」）。",
     flt_routed:"只有筛选条件：已用文件名索引列出全盘符合条件的文件（最新的在前）",
@@ -311,6 +323,9 @@ const I18N = {
     flt_time:"modified {start} – {end}", ttl_rmflt:"Remove this filter",
     flt_suggest:"Only files modified “{phrase}”? ({start} – {end})", flt_unknown:"Filter not understood (kept as words): {u}",
     fn_windows:"Everything not found: searched file names in the Windows Search index instead (indexed locations only, usually your user folders; install Everything for whole-disk results)",
+    btn_ask:"Ask", ttl_ask:"A local model reads the relevant files and answers, with sources (all on this PC)", ans_title:"Answer",
+    ans_wait:"Reading the relevant files and answering… (local model; may take ten-plus seconds on a CPU)", ans_sources:"Sources: ",
+    err_no_llm:"The local Q&A add-on is not installed.", err_no_sources:"Nothing relevant was found in the deep index.", err_no_question:"Type a question first.",
     btn_similar:"Find similar", ttl_similar:"Other files whose content is close to this one (deep index)",
     sim_note:"Files similar to “{name}”", err_no_similar:"No similar files in the deep index (add the relevant folders to Deep Semantic first).",
     flt_routed:"Filters only: listed matching files from the filename index across the disk (newest first)",
@@ -526,6 +541,8 @@ async function poll(){
     if(s.personalize && !PERS_PENDING){ PERS_ON = !!s.personalize.enabled;
       const pc=document.getElementById('persChk'); if(pc && pc.checked!==PERS_ON) pc.checked=PERS_ON; }
     applyOcrStatus(s.ocr);
+    const askB = document.getElementById('askBtn');
+    if(askB) askB.style.display = (s.qa && s.qa.available)? '' : 'none';
     const mImg = document.getElementById('mImg');
     if(mImg) mImg.style.display = (s.images && s.images.available)? '' : 'none';
     if(DLC_PACKS.length){
@@ -698,6 +715,54 @@ async function doSearch(live){
   if(r.snip_id) upgradeSnippets(r.snip_id, my);
 }
 let LAST_RESP = null;
+// ---- ask your files: streamed answer with clickable [n] sources ----
+let ASK_SEQ = 0, ANS_SOURCES = [];
+function renderAnswer(text){
+  return escapeHtml(text).replace(/\[(\d{1,2})\]/g, (m, n)=> ANS_SOURCES[n-1]?
+    `<a href="#" class="cite" data-n="${n}">[${n}]</a>` : m);
+}
+function renderSources(cited){
+  const used = ANS_SOURCES.filter(s=> (cited||[]).includes(s.n));
+  if(!used.length) return '';
+  return escapeHtml(t('ans_sources')) + used.map(s=> `<a href="#" class="cite" data-n="${s.n}">[${s.n}] `+
+    `${escapeHtml(s.name)}${s.page? ' · '+escapeHtml(t('res_page', {n:s.page})):''}</a>`).join('');
+}
+async function askQuestion(){
+  const q = document.getElementById('q').value.trim(); if(!q) return;
+  const card = document.getElementById('answerCard'), txt = document.getElementById('answerText'),
+        src = document.getElementById('answerSrc');
+  const my = ++ASK_SEQ;
+  card.style.display = 'block'; txt.textContent = t('ans_wait'); src.innerHTML = ''; ANS_SOURCES = [];
+  let r;
+  try{ r = await fetch('/api/ask', {method:'POST', headers:{'Content-Type':'application/json'},
+                                   body: JSON.stringify({question:q})}); }
+  catch(e){ txt.textContent = t('generic_fail'); return; }
+  if(!r.ok){ let j = {}; try{ j = await r.json(); }catch(e){} if(my===ASK_SEQ) txt.textContent = emsg(j); return; }
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = '', answer = '';
+  for(;;){
+    const {value, done} = await reader.read();
+    if(my!==ASK_SEQ){ try{ reader.cancel(); }catch(e){} return; }
+    if(done) break;
+    buf += dec.decode(value, {stream:true});
+    let i;
+    while((i = buf.indexOf('\n')) >= 0){
+      const line = buf.slice(0, i); buf = buf.slice(i+1);
+      if(!line.trim()) continue;
+      let ev; try{ ev = JSON.parse(line); }catch(e){ continue; }
+      if(ev.type==='sources'){ ANS_SOURCES = ev.sources||[]; answer=''; txt.textContent=''; }
+      else if(ev.type==='token'){ answer += ev.text; txt.innerHTML = renderAnswer(answer); }
+      else if(ev.type==='error'){ txt.textContent = t('generic_fail') + ' ' + ev.error; }
+      else if(ev.type==='done'){ src.innerHTML = renderSources(ev.cited); }
+    }
+  }
+}
+document.getElementById('answerCard').addEventListener('click', ev=>{
+  const a = ev.target.closest('a.cite'); if(!a) return;
+  ev.preventDefault();
+  const s = ANS_SOURCES[parseInt(a.dataset.n, 10) - 1]; if(!s) return;
+  openPath(s.path, false, (s.page && /\.pdf$/i.test(s.name))? s.page : undefined);
+});
 // search as you type: results now arrive in ~10-20 ms (snippets follow), so
 // Deep / Filename modes can run live. Whole-disk mode embeds ~120 Windows
 // Search candidates per query (~1.4 s on a CPU), so it stays on Enter.

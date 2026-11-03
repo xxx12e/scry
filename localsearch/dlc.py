@@ -47,6 +47,19 @@ REGISTRY = [
         "size": 0,
         "sha256": "",
     },
+    {
+        # A small instruct model in GGUF (e.g. Qwen3-1.7B Q4_K_M, ~1.1 GB, or
+        # Qwen3-0.6B, ~0.5 GB). Needs llama-cpp-python in the build.
+        "id": "qa-local",
+        "kind": "llm",
+        "name_zh": "本地问答包 · 回答附出处",
+        "name_en": "Ask your files · answers with sources",
+        "desc_zh": "直接提问（「去年差旅住宿标准是多少？」），本地小模型读相关文件后作答，每句都标注出处、可点开原文。约 1.1 GB；CPU 上每次回答约十几秒。",
+        "desc_en": "Ask a question in plain words; a small local model reads the relevant files and answers with clickable sources. ~1.1 GB; about ten-plus seconds per answer on a CPU.",
+        "url": "",
+        "size": 0,
+        "sha256": "",
+    },
 ]
 
 
@@ -68,6 +81,12 @@ def is_installed(index_dir, pid):
     if p and p["kind"] == "model":
         return (d / "config.json").exists()
     return d.exists() and any(d.iterdir()) if d.exists() else False
+
+
+def llm_dir(index_dir):
+    """Installed local-LLM pack dir (contains a .gguf), or None."""
+    d = pack_dir(index_dir, "qa-local")
+    return str(d) if d.is_dir() and any(f.suffix.lower() == ".gguf" for f in d.iterdir()) else None
 
 
 def clip_dir(index_dir):

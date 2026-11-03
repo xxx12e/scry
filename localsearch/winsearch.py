@@ -48,7 +48,10 @@ def available():
 def _run_sql(sql):
     """Run one SystemIndex query -> [(path, snippet)] via a single GetRows call;
     None if the query itself failed (vs [] for no matches)."""
-    import win32com.client
+    try:
+        import win32com.client
+    except ImportError:               # not Windows / no pywin32: provider unavailable
+        return None
     out = []
     conn = None
     try:

@@ -226,6 +226,7 @@ def create_app(index_dir, config=None):
                        last_error_detail=state.last_error_detail, index_error=engine.load_error,
                        personalize=engine.personalizer.stats(),
                        ocr=engine.ocr_status(), images=engine.image_status(),
+                       qa=engine.qa_status(),
                        dlc=state.dlc, restart_required=state.restart_required)
 
     @app.post("/api/cancel_build")
@@ -508,6 +509,46 @@ def create_app(index_dir, config=None):
                                    terms=[], page=h.page) for h in hits) if r is not None]
         state.remember_shown(r["path"] for r in res)
         return jsonify(results=res, snip_id=sid, similar_to=name)
+
+    @app.post("/api/ask")
+    def ask():
+        """Answer a question from the deep index with a local model, streamed as
+        NDJSON: {"type":"sources"} first, then "token"s, then "done" with the
+        source numbers the answer actually cited."""
+        from . import qa
+        d = _body()
+        question = str(d.get("question") or "").strip()
+        if not question:
+            return jsonify(ok=False, code="no_question"), 400
+        try:
+            k = min(max(int(d.get("top_k", 5)), 1), 8)
+        except (TypeError, ValueError):
+            k = 5
+        llm = engine.qa_backend()
+        qf = query_mod.parse(question)
+        sources = qa.gather_sources(engine, qf.text or question, k=k, filters=qf)
+        state.remember_shown(s["path"] for s in sources)       # citations are openable
+        public = [{key: s[key] for key in ("n", "name", "path", "page")} for s in sources]
+        if llm is None:
+            return jsonify(ok=False, code="no_llm", sources=public), 409
+        if not sources:
+            return jsonify(ok=False, code="no_sources", sources=[]), 404
+        messages = qa.build_messages(question, sources)
+
+        def gen():
+            yield json.dumps({"type": "sources", "sources": public}, ensure_ascii=False) + "\n"
+            answer = ""
+            with engine.llm_lock:
+                try:
+                    for piece in llm.stream(messages):
+                        answer += piece
+                        yield json.dumps({"type": "token", "text": piece}, ensure_ascii=False) + "\n"
+                except Exception as e:
+                    log.warning("answer failed: %s", e)
+                    yield json.dumps({"type": "error", "error": str(e)}) + "\n"
+            yield json.dumps({"type": "done", "cited": qa.cited(answer, len(sources))}) + "\n"
+
+        return Response(gen(), mimetype="application/x-ndjson")
 
     @app.get("/api/thumb")
     def thumb():

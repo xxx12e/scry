@@ -80,6 +80,8 @@ class SearchEngine:
         self._shown_lock = threading.Lock()
         self.load_error = ""
         self.filename_backend = None      # "everything" | "windows" (fallback) | None
+        self.llm = None                   # local Q&A model (DLC), loaded on first use
+        self.llm_lock = threading.Lock()  # llama.cpp contexts are not thread-safe
         self.clip = None                  # image-search pack (DLC), loaded on first use
         self.images = None                # ImageIndex for it
         self._clip_lock = threading.Lock()
@@ -213,6 +215,28 @@ class SearchEngine:
             return False
         parts = full[len(best) + 1:].split(os.sep)[:-1]     # dirs below the root
         return any(self._excluded_dir(d) for d in parts if d)
+
+    # ---- ask your files (optional local LLM pack) ----
+    def qa_backend(self):
+        if self.llm is None:
+            from . import qa
+            from .embedder import _has
+            path = qa.find_model(dlc.llm_dir(self.index_dir))
+            if path is None or not _has("llama_cpp"):
+                return None
+            with self.llm_lock:
+                if self.llm is None:
+                    try:
+                        self.llm = qa.LlamaBackend(path)
+                    except Exception as e:
+                        log.warning("local Q&A model unusable: %s", e)
+                        return None
+        return self.llm
+
+    def qa_status(self):
+        from .embedder import _has
+        return dict(available=self.llm is not None or (
+            dlc.llm_dir(self.index_dir) is not None and _has("llama_cpp")))
 
     # ---- image search by description (optional CLIP pack) ----
     def images_enabled(self):
