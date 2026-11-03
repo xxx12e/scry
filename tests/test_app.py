@@ -32,13 +32,16 @@ def test_local_only_guard(client, host, origin, ok):
 
 
 def test_open_only_search_results(client, corpus):
+    import os
+    import sys
     c, engine, state = client
     engine.build([corpus])
-    target = str(corpus / "reservoir.txt")
+    target = str((corpus / "reservoir.txt").resolve())
     assert c.post("/api/open", json={"path": target}).status_code == 403
-    assert c.post("/api/open", json={"path": "/bin/sh"}).status_code == 403
+    # an existing executable on any OS: must never be launchable via the API
+    assert c.post("/api/open", json={"path": sys.executable}).status_code == 403
     res = c.post("/api/search", json={"query": "reservoir water", "mode": "semantic"}).get_json()
-    assert any(r["path"] == target for r in res["results"])
+    assert any(os.path.normcase(r["path"]) == os.path.normcase(target) for r in res["results"])
     r = c.post("/api/open", json={"path": target})
     assert r.status_code == 200 and r.get_json()["ok"] is True
     assert c.post("/api/open", json={"path": str(corpus / "nope.txt")}).status_code == 404

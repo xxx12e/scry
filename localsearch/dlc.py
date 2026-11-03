@@ -58,9 +58,18 @@ def is_installed(index_dir, pid):
 
 
 def model_override(index_dir):
-    """Path to an installed model pack, or None -> use the bundled model."""
+    """Path to an installed model pack, or None -> use the bundled model. A pack
+    no installed backend can load (e.g. no model.onnx in a torch-free build) is
+    ignored rather than leaving the app without a model."""
     d = pack_dir(index_dir, "model-large")
-    return str(d) if (d / "config.json").exists() else None
+    if not (d / "config.json").exists():
+        return None
+    from .embedder import can_load
+    if not can_load(d):
+        log.warning("model pack %s cannot be loaded by any installed backend; "
+                    "using the bundled model", d)
+        return None
+    return str(d)
 
 
 def status(index_dir):

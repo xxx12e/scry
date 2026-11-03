@@ -74,8 +74,9 @@ Opening a result (`/api/open` → `engine.record_open`) updates a per-user profi
 `<index_dir>/personal.json`: decayed open-counts per file and folder, plus a decayed
 interest centroid of the embeddings you open. Searches re-rank by blending the base score
 with those priors (`Config.pers_*`), so **files and folders you actually open float up** —
-recency-weighted. The blend keeps base relevance dominant by design (a fresh query is never
-hijacked); the model is **never trained**. Toggle via `/api/personalize`, wipe via
+recency-weighted. The blend keeps base relevance dominant by design, with one hard rule: the
+best match for the query is never displaced unless a familiar file is within
+`pers_top_margin` (10%) of it in relevance; the model is **never trained**. Toggle via `/api/personalize`, wipe via
 `/api/forget`. See [`../demo_personalize.py`](../demo_personalize.py).
 
 ## Dependencies
@@ -89,15 +90,21 @@ See [`../requirements.txt`](../requirements.txt). Filename mode also needs
 
 Bundle everything into a single self‑contained folder (no Python needed on the target):
 
-- **PyInstaller onedir**, CPU‑only torch.
-- Bundle as data: `web/`, `tools/es.exe`, and the model dir (`models/embed`) — resolved
-  at runtime via `resources.py` (`sys._MEIPASS` when frozen).
-- Ship the model as **fp16** on disk and upcast to fp32 at load (halves the asset; CPU
-  compute stays fp32). `torch` and `transformers` must keep their loose source (both read
-  their own source at runtime).
-- `collect_all(..., include_py_files=False)` for the ML packages, exclude `hf_xet`, and set
-  `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1` in the entry point so nothing ever hits the
-  network.
+- **PyInstaller onedir**. Bundle as data: `web/`, `tools/es.exe`, and the model dir
+  (`models/embed`) — resolved at runtime via `resources.py` (`sys._MEIPASS` when frozen;
+  `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` are forced on there).
+- **Recommended: torch‑free build.** Run `python scripts/export_onnx.py models/embed` once on
+  the build machine (needs torch + transformers + onnx + onnxruntime there), then build from
+  `requirements-slim.txt` and exclude `torch`, `transformers`, `sentence_transformers`,
+  `scipy`, `sklearn`. The app picks the ONNX backend automatically. Measured against the v1.4
+  bundle: −523 MB unpacked (1026 → ~500 MB, −146 MB zipped), model load ~9 s → ~1.5 s,
+  identical embeddings (min cosine 0.99999994 — existing indexes stay valid), indexing
+  throughput on par (BERT attention fused by ONNX Runtime).
+  Caveat: a DLC model pack needs its own `model.onnx` in a torch‑free build; packs that
+  no installed backend can load are ignored (the bundled model is used).
+- **torch build** (as v1.4): CPU‑only torch, model shipped as fp16 safetensors and upcast to
+  fp32 at load; `torch` and `transformers` must keep their loose source;
+  `collect_all(..., include_py_files=False)` for the ML packages; exclude `hf_xet`.
 
 ## Scope
 

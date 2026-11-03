@@ -195,5 +195,20 @@ class Personalizer:
                             + c.pers_w_interest * inter[i])
                 h.personal = self._w(self.opens.get(_norm(h.path))) > 0
                 h.pscore = (1 - lam) * base[i] + lam * personal
-        hits = sorted(hits, key=lambda x: -x.pscore)
-        return hits
+        return self._protect_best(hits, base, c.pers_top_margin)
+
+    @staticmethod
+    def _protect_best(hits, base, margin):
+        """Sort by personalized score, but keep the guarantee the README makes:
+        a familiar file may rise from far down the list, yet it never displaces
+        the BEST match for the query unless the two are practically tied
+        (base relevance within `margin` of the candidates' score range)."""
+        order = sorted(range(len(hits)), key=lambda i: -hits[i].pscore)
+        best = max(range(len(hits)), key=lambda i: base[i])
+        pos = order.index(best)
+        if pos:
+            ahead = order[:pos]
+            tied = [i for i in ahead if base[i] >= base[best] - margin]
+            demoted = [i for i in ahead if base[i] < base[best] - margin]
+            order = tied + [best] + demoted + order[pos + 1:]
+        return [hits[i] for i in order]

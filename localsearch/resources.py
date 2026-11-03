@@ -47,7 +47,11 @@ def model_tag(model_name):
     try:
         cfg = p / "config.json"
         if cfg.is_file():
-            return "local:%s:%s" % (p.name, hashlib.sha1(cfg.read_bytes()).hexdigest()[:12])
+            h = hashlib.sha1(cfg.read_bytes())
+            q = p / "quantization.json"          # a quantized variant embeds differently
+            if q.is_file():
+                h.update(q.read_bytes())
+            return "local:%s:%s" % (p.name, h.hexdigest()[:12])
     except OSError:
         pass
     return str(model_name)

@@ -1,0 +1,27 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"        # the portable build ships Python 3.12
+          cache: pip
+      # The suite uses a hashing stand-in embedder, so torch / the model are not
+      # needed; rank-bm25 is only the reference implementation for BM25 tests.
+      - run: python -m pip install flask faiss-cpu numpy tqdm pymupdf watchdog pytest rank-bm25
+      - run: python -m pytest -q

@@ -10,7 +10,8 @@ class Config:
     query_prefix: str = "query: "             # multilingual-e5 wants both prefixes
     doc_prefix: str = "passage: "
     device: str = "auto"
-    embed_batch_size: int = 128
+    embed_batch_size: int = 128           # chunks gathered across files per embed call
+    encode_batch_size: int = 0            # model batch; 0 = auto (CPU 16, GPU 128)
 
     alpha: float = 0.7
     fusion_fetch: int = 100
@@ -36,6 +37,9 @@ class Config:
     pers_w_folder: float = 0.2
     pers_w_interest: float = 0.3
     pers_decay: float = 0.9           # older opens decay -> recency-weighted profile
+    pers_top_margin: float = 0.1      # the best match is never displaced by a result
+                                      # less relevant than it by more than this share
+                                      # of the candidates' score range
 
     supported_ext: tuple = (".txt", ".md", ".pdf", ".docx", ".xlsx", ".pptx",
                             ".csv", ".html", ".htm", ".rtf")

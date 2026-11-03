@@ -67,7 +67,7 @@ Plus: **bilingual UI (中文 / English, one‑click toggle)**, keyboard‑driven
 
 ## It learns *you* — on your machine
 
-The more you use Scry, the better it fits you: the **files and folders you actually open float toward the top** for similar searches, weighted toward your recent habits. It's a gentle re‑rank — a fresh query is **never** hijacked, and it **never buries the more relevant result**. And it's personalization with nothing to give up: it learns **only from your own clicks, on your own disk, and never trains the model or sends anything anywhere.** Toggle it off or hit **Forget me** whenever you like.
+The more you use Scry, the better it fits you: the **files and folders you actually open float toward the top** for similar searches, weighted toward your recent habits. It's a gentle re‑rank with a hard rule: a familiar file can rise from far down the list, but it **never displaces the best match for your query** unless the two are practically tied — and a fresh query is **never** hijacked. And it's personalization with nothing to give up: it learns **only from your own clicks, on your own disk, and never trains the model or sends anything anywhere.** Toggle it off or hit **Forget me** whenever you like.
 
 ## The privacy stance (the whole point)
 

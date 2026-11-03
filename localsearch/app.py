@@ -493,9 +493,23 @@ def main():
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
 
+    from .instance import InstanceLock, free_port
+    lock = InstanceLock(args.index_dir)
+    if not lock.acquire():
+        # already running on this index: bring that one up instead of a second
+        # copy that would fight it over the index files
+        url = lock.running_url() or f"http://127.0.0.1:{args.port}"
+        print(f"Scry is already running -> {url}")
+        print("已经在运行了，正在打开它的页面 / opening the running instance.")
+        if not args.no_browser:
+            webbrowser.open(url)
+        return
+    port = free_port(args.port)
+    url = f"http://127.0.0.1:{port}"
+
     app, engine, state = create_app(args.index_dir)
     close_once = _install_shutdown_hooks(engine)
-    url = f"http://127.0.0.1:{args.port}"
+    lock.publish(url)
     print("=" * 64)
     print(f"  LocalSearch UI  ->  {url}")
     print(f"  index dir: {args.index_dir}")
@@ -505,9 +519,10 @@ def main():
     if not args.no_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     try:
-        app.run(host="127.0.0.1", port=args.port, threaded=True)
+        app.run(host="127.0.0.1", port=port, threaded=True)
     finally:
         close_once()
+        lock.release()
 
 
 if __name__ == "__main__":

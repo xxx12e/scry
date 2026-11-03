@@ -1,0 +1,24 @@
+# Torch-free runtime (~500 MB smaller bundle, ~1 s model load).
+# Needs the model exported once on a build machine:
+#     python scripts/export_onnx.py models/embed     (see that script for details)
+# Install:  pip install -r requirements-slim.txt
+
+flask>=3.0
+faiss-cpu>=1.7
+numpy>=1.24
+tqdm>=4.66
+pymupdf>=1.24          # PDF text extraction
+watchdog>=4.0          # live folder watching (Control mode)
+onnxruntime>=1.17      # runs models/embed/model.onnx on CPU
+tokenizers>=0.15       # the model's tokenizer.json
+pywin32>=306 ; sys_platform == "win32"   # Windows Search content index (instant mode)
+
+# Optional image OCR (Windows built-in engine; degrades to off if absent)
+winrt-runtime>=3.0 ; sys_platform == "win32"
+winrt-Windows.Media.Ocr>=3.0 ; sys_platform == "win32"
+winrt-Windows.Graphics.Imaging>=3.0 ; sys_platform == "win32"
+winrt-Windows.Storage>=3.0 ; sys_platform == "win32"
+winrt-Windows.Storage.Streams>=3.0 ; sys_platform == "win32"
+winrt-Windows.Globalization>=3.0 ; sys_platform == "win32"
+winrt-Windows.Foundation>=3.0 ; sys_platform == "win32"
+winrt-Windows.Foundation.Collections>=3.0 ; sys_platform == "win32"
