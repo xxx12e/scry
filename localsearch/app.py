@@ -152,7 +152,7 @@ def _human_size(b):
         b /= 1024
 
 
-def _result(path, snippet, score, terms, personal=False):
+def _result(path, snippet, score, terms, personal=False, page=None):
     """Build a result row with current metadata; None if the file is gone."""
     import time as _t
     try:
@@ -163,7 +163,7 @@ def _result(path, snippet, score, terms, personal=False):
     size = _human_size(st.st_size)
     mtime = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(st.st_mtime))
     return dict(name=os.path.basename(path), path=path, snippet=snippet, score=score,
-                terms=terms, ext=ext, size=size, mtime=mtime, personal=personal)
+                terms=terms, ext=ext, size=size, mtime=mtime, personal=personal, page=page)
 
 
 def create_app(index_dir, config=None):
@@ -457,7 +457,8 @@ def create_app(index_dir, config=None):
             hits = engine.search_semantic(q, top_k=k, snippets="lexical", filters=qf)
             sid = engine.queue_snippets("semantic", q, hits) if hits else None
             res = [_result(h.path, snippet=h.snippet or _snippet(h.chunk_text),
-                           score=round(h.score, 3), terms=h.terms, personal=h.personal) for h in hits]
+                           score=round(h.score, 3), terms=h.terms, personal=h.personal,
+                           page=h.page) for h in hits]
         res = [r for r in res if r is not None]
         state.remember_shown(r["path"] for r in res)
         out = dict(results=res, mode_used=used, **meta)
@@ -486,7 +487,7 @@ def create_app(index_dir, config=None):
                            error="No similar files in the deep index.")
         sid = engine.queue_snippets("semantic", qvec, hits)
         res = [r for r in (_result(h.path, snippet=h.snippet, score=round(h.score, 3),
-                                   terms=[]) for h in hits) if r is not None]
+                                   terms=[], page=h.page) for h in hits) if r is not None]
         state.remember_shown(r["path"] for r in res)
         return jsonify(results=res, snip_id=sid, similar_to=name)
 
@@ -505,6 +506,10 @@ def create_app(index_dir, config=None):
         d = _body()
         path = str(d.get("path") or "")
         reveal = bool(d.get("reveal", False))
+        try:
+            page = int(d.get("page") or 0)
+        except (TypeError, ValueError):
+            page = 0
         if not path or not os.path.exists(path):
             return jsonify(ok=False, code="no_file", error="File no longer exists."), 404
         if not state.was_shown(path):
@@ -516,6 +521,9 @@ def create_app(index_dir, config=None):
         try:
             if reveal:
                 subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')
+            elif page > 0 and path.lower().endswith(".pdf"):
+                # every browser's PDF viewer honours #page=N (Edge ships with Windows)
+                webbrowser.open(Path(path).resolve().as_uri() + f"#page={page}")
             else:
                 os.startfile(path)
             return jsonify(ok=True)

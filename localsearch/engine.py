@@ -279,8 +279,18 @@ class SearchEngine:
         if not text:
             return [], fmeta, True
         try:
-            chunks = chunk_text(text, self.cfg.chunk_max_words,
-                                self.cfg.chunk_overlap_sentences)
+            if "\f" in text:
+                # paged formats: chunk page by page, so a chunk never straddles a
+                # page break and "open at page N" lands where the match is
+                chunks, base = [], 0
+                for page_no, seg in enumerate(text.split("\f"), 1):
+                    for t, st, en in chunk_text(seg, self.cfg.chunk_max_words,
+                                                self.cfg.chunk_overlap_sentences):
+                        chunks.append((t, base + st, base + en, page_no))
+                    base += len(seg) + 1
+            else:
+                chunks = chunk_text(text, self.cfg.chunk_max_words,
+                                    self.cfg.chunk_overlap_sentences)
             return chunks, fmeta, False
         except Exception as e:
             log.warning("chunk failed, skipping %s: %s: %s", path, type(e).__name__, e)
@@ -704,7 +714,7 @@ class SearchEngine:
                     continue
                 if meta["path"] not in best:
                     best[meta["path"]] = Hit(meta["path"], score, meta["text"], meta["start"],
-                                             meta["end"], cid=cid)
+                                             meta["end"], cid=cid, page=meta.get("page"))
                 if len(best) >= top_k:
                     break
         hits = list(best.values())

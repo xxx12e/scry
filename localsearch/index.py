@@ -93,8 +93,11 @@ class DualIndex:
         cids = list(range(self.next_id, self.next_id + len(chunks)))
         self.next_id += len(chunks)
         self.dense.add_with_ids(vecs, np.array(cids, dtype=np.int64))
-        for cid, (text, st, en), i in zip(cids, chunks, range(len(chunks))):
+        for cid, ch, i in zip(cids, chunks, range(len(chunks))):
+            text, st, en = ch[0], ch[1], ch[2]
             self.chunk_meta[cid] = dict(path=path, idx=i, text=text, start=st, end=en)
+            if len(ch) > 3 and ch[3]:
+                self.chunk_meta[cid]["page"] = ch[3]        # page/slide number
             toks = self._tokens[cid] = tokenize(text)
             self._bm25_apply(True, cid, toks)
         self.file_chunks[path] = cids

@@ -206,7 +206,7 @@ const I18N = {
     em_tip_instant:" 「全盘语义」靠 Windows 索引找候选，纯改写 / 跨语言（零字面重合）可能召不回——想按纯意思搜，请把该文件夹加进「深度语义」（掌控模式）再搜。",
     em_tip_filename:" 试试切到「全盘语义」按内容/意思查找。",
     em_tip_semantic:" 换个说法，或确认这个文件夹已经建好索引。",
-    res_score:"匹配度 {score}", res_modified:"修改于 {mtime}",
+    res_score:"匹配度 {score}", res_modified:"修改于 {mtime}", res_page:"第 {n} 页", btn_openpage:"打开到第 {n} 页",
     btn_open:"打开文件", btn_reveal:"打开所在文件夹",
     err_bad_folder:"这不是一个有效的文件夹。", err_busy:"正在扫描中，请稍候（或先取消）。",
     err_not_controlled:"不在掌控列表中。", err_no_folders:"还没有掌控任何文件夹。",
@@ -286,7 +286,7 @@ const I18N = {
     em_tip_instant:" Whole-disk Semantic finds candidates via the Windows index, so a pure paraphrase / cross-language query (zero shared words) may miss — add that folder to Deep Semantic (Control mode) to search by meaning only.",
     em_tip_filename:" Try Whole-disk Semantic to search by content / meaning.",
     em_tip_semantic:" Try different wording, or make sure this folder has been indexed.",
-    res_score:"score {score}", res_modified:"modified {mtime}",
+    res_score:"score {score}", res_modified:"modified {mtime}", res_page:"p. {n}", btn_openpage:"Open at p. {n}",
     btn_open:"Open file", btn_reveal:"Open containing folder",
     err_bad_folder:"That is not a valid folder.", err_busy:"Indexing in progress, please wait (or cancel first).",
     err_not_controlled:"Not in the controlled list.", err_no_folders:"No folders are being controlled yet.",
@@ -627,6 +627,7 @@ document.getElementById('results').addEventListener('click', ev=>{
   const path = b.closest('.res').dataset.path;
   if(b.dataset.act==='open') openPath(path, false);
   else if(b.dataset.act==='reveal') openPath(path, true);
+  else if(b.dataset.act==='openpage') openPath(path, false, parseInt(b.dataset.page, 10));
   else if(b.dataset.act==='similar') findSimilar(path);
 });
 function renderResults(items, mode){
@@ -643,6 +644,7 @@ function renderResults(items, mode){
     const meta = [
       it.personal? `<span class="badge pers" title="${escapeHtml(t('ttl_pers'))}">${escapeHtml(t('badge_personal'))}</span>`:'',
       it.ext? `<span class="badge">${escapeHtml(it.ext)}</span>`:'',
+      it.page? escapeHtml(t('res_page', {n:it.page})):'',
       it.size? `${escapeHtml(it.size)}`:'',
       it.mtime? escapeHtml(t('res_modified', {mtime:it.mtime})):''
     ].filter(Boolean).join('<span style="opacity:.5">·</span>');
@@ -652,6 +654,7 @@ function renderResults(items, mode){
       <div class="path">${escapeHtml(it.path)}</div>${snip}
       <div class="acts">
         <button data-act="open">${escapeHtml(t('btn_open'))}</button>
+        ${(it.page && it.ext==='pdf')? `<button data-act="openpage" data-page="${it.page}">${escapeHtml(t('btn_openpage', {n:it.page}))}</button>`:''}
         <button data-act="reveal">${escapeHtml(t('btn_reveal'))}</button>
         <button data-act="similar" title="${escapeHtml(t('ttl_similar'))}">${escapeHtml(t('btn_similar'))}</button>
       </div></div>`;
@@ -747,8 +750,8 @@ async function upgradeSnippets(id, my){
     if(it && box){ box.innerHTML = highlight(it.snippet, it.terms); box.classList.remove('pending'); }
   });
 }
-async function openPath(path, reveal){
-  const r = await api('/api/open', {path, reveal});
+async function openPath(path, reveal, page){
+  const r = await api('/api/open', {path, reveal, page});
   if(!r.ok) notice(emsg(r) || t('open_fail'), true);
 }
 function addRecent(q){

@@ -26,6 +26,7 @@ class Hit:
     cid: int = -1                 # winning chunk id (deep mode) -> vec reconstruct
     pscore: float = None          # personalized score (set by Personalizer.rerank)
     personal: bool = False        # True if history boosted this hit
+    page: int = None              # page/slide of the winning chunk (paged formats)
 
 
 def _minmax(pairs, floor=None):
@@ -167,7 +168,7 @@ def retrieve(index, qvec, qtokens, top_k, alpha, fetch, allowed=None):
         p = meta["path"]
         if p not in best_per_file:
             best_per_file[p] = Hit(p, sc, meta["text"], meta["start"], meta["end"],
-                                   terms=qtokens, cid=cid)
+                                   terms=qtokens, cid=cid, page=meta.get("page"))
         if len(best_per_file) >= top_k:
             break
     return list(best_per_file.values())
